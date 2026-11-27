@@ -43,7 +43,7 @@ public class DiagonalView extends View {
     private static final int BG = 0xFF101014;
 
     private final List<AppEntry> items = new ArrayList<>();
-    private int centerIndex;
+    private float centerPos;
     private int favStart, favEnd; // [favStart, favEnd)
 
     private final float dp;
@@ -115,13 +115,13 @@ public class DiagonalView extends View {
         items.addAll(list);
         this.favStart = favStart;
         this.favEnd = favStart + favCount;
-        centerIndex = favCount > 0 ? favStart + favCount / 2 : Math.max(0, list.size() / 2);
+        centerPos = favCount > 0 ? favStart + favCount / 2f : list.size() / 2f;
         if (recenter) jumpToCenter(); else clampScroll();
         invalidate();
     }
 
     /** Size of the icon bitmaps to prepare. */
-    public int iconSizePx() { return Math.round(iconSize); }
+    public int iconSizePx() { return Math.round(Math.min(iconSize, 72 * dp)); } // caps icon memory
 
     public void jumpToCenter() {
         scroller.forceFinished(true);
@@ -163,7 +163,7 @@ public class DiagonalView extends View {
 
     private static float sOf(float x, float y) { return (x + y) * INV_SQRT2; }
 
-    private float centerScroll() { return (centerIndex + 0.5f) * spacing - screenS() / 2f; }
+    private float centerScroll() { return centerPos * spacing - screenS() / 2f; }
 
     private float minScroll() { return Math.min(0f, centerScroll()); }
 
@@ -303,6 +303,7 @@ public class DiagonalView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+        scroller.forceFinished(true);
         float oldSpacing = spacing;
         float oldMiddle = scroll + (oldw + oldh) * INV_SQRT2 / 2f;
         computeSizes(w, h);

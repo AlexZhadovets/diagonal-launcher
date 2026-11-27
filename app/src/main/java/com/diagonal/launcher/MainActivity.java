@@ -66,6 +66,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     /** Last loaded data, kept so pin/unpin can re-arrange without reloading icons. */
     private List<AppEntry> allApps = new ArrayList<>();
     private Map<String, Long> usage = new HashMap<>();
+    private AppEntry[] lastHome = new AppEntry[HOME_SLOTS];
+    private AlertDialog shownDialog;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -137,8 +139,13 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         super.onNewIntent(intent);
         // Every Home press brings back the 5 home apps in the middle.
         if (Intent.ACTION_MAIN.equals(intent.getAction()) && diagonal != null) {
-            if (hasWindowFocus()) diagonal.animateToCenter();
-            else recenterOnNextLoad = true;
+            if (shownDialog != null && shownDialog.isShowing()) shownDialog.dismiss();
+            if (hasWindowFocus()) {
+                diagonal.animateToCenter();
+            } else {
+                diagonal.jumpToCenter();
+                recenterOnNextLoad = true;   // re-sort by fresh usage once, then stay put
+            }
         }
     }
 
@@ -193,13 +200,16 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
                 ? ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName())
                 : ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
-        return mode == AppOpsManager.MODE_ALLOWED;
+        return mode == AppOpsManager.MODE_ALLOWED
+                || (mode == AppOpsManager.MODE_DEFAULT
+                && checkSelfPermission(android.Manifest.permission.PACKAGE_USAGE_STATS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED);
     }
 
     private void maybeAskForUsageAccess() {
         if (prefs.getBoolean(KEY_ASKED_USAGE, false) || hasUsageAccess()) return;
         prefs.edit().putBoolean(KEY_ASKED_USAGE, true).apply();
-        dialog().setTitle(R.string.usage_title)
+        shownDialog = dialog().setTitle(R.string.usage_title)
                 .setMessage(R.string.usage_message)
                 .setPositiveButton(R.string.usage_allow, (d, w) -> openUsageSettings())
                 .setNegativeButton(R.string.later, null)
@@ -266,7 +276,9 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         for (int slot = 0; slot < HOME_SLOTS; slot++) {
             if (slot == current) continue;
             AppEntry occupant = fav[slot].isEmpty() ? null : byKey.get(fav[slot]);
-            String who = occupant == null ? getString(R.string.slot_auto) : occupant.label;
+            String who = occupant != null ? occupant.label
+                    : lastHome[slot] != null ? lastHome[slot].label + ", " + getString(R.string.slot_auto)
+                    : getString(R.string.slot_auto);
             labels.add(getString(R.string.pin_to_slot, slot + 1, who));
             final int s = slot;
             final int from = current;
@@ -288,7 +300,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             actions.add(this::openUsageSettings);
         }
 
-        dialog().setTitle(app.label)
+        shownDialog = dialog().setTitle(app.label)
                 .setItems(labels.toArray(new String[0]), (d, which) -> actions.get(which).run())
                 .show();
     }
@@ -329,7 +341,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             return collator.compare(a.label, b.label);
         });
 
-        // Home slots: pinned apps, empty slots filled with the most-used apps.
+        // Home slots: pinned apps; empty slots keep their previous app, else the most-used one.
         Map<String, AppEntry> byKey = new HashMap<>();
         for (AppEntry a : apps) byKey.put(a.key, a);
         String[] saved = readFavorites();
@@ -339,12 +351,18 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             AppEntry a = saved[i].isEmpty() ? null : byKey.get(saved[i]);
             if (a != null && taken.add(a.key)) home[i] = a;
         }
+        for (int i = 0; i < HOME_SLOTS; i++) {
+            if (home[i] != null || !saved[i].isEmpty() || lastHome[i] == null) continue;
+            AppEntry prev = byKey.get(lastHome[i].key);
+            if (prev != null && !recenter && taken.add(prev.key)) home[i] = prev;
+        }
         int next = 0;
         for (int i = 0; i < HOME_SLOTS; i++) {
             if (home[i] != null) continue;
             while (next < byUsage.size() && taken.contains(byUsage.get(next).key)) next++;
             if (next < byUsage.size()) { home[i] = byUsage.get(next); taken.add(home[i].key); }
         }
+        lastHome = home;
         List<AppEntry> favs = new ArrayList<>();
         for (AppEntry a : home) if (a != null) favs.add(a);
 
@@ -372,6 +390,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         for (String pkg : pkgs) {
             cache.values().removeIf(a -> a.component.getPackageName().equals(pkg));
         }
+        loadGeneration++;                       // discard an in-flight load holding stale icons
         main.removeCallbacks(reload);           // collapse bursts of package events
         main.postDelayed(reload, 300);
     }
@@ -383,16 +402,24 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         final int iconPx = Math.max(diagonal.iconSizePx(), 48);
         final Map<String, AppEntry> known = new HashMap<>(cache);
         worker.execute(() -> {
-            List<AppEntry> result = queryApps(iconPx, known);
-            Map<String, Long> use = readUsage();
+            List<AppEntry> result;
+            Map<String, Long> use;
+            try {
+                result = queryApps(iconPx, known);
+                use = readUsage();
+            } catch (RuntimeException e) {
+                return;                         // never crash the home screen from the worker
+            }
             main.post(() -> {
                 if (gen != loadGeneration || isDestroyed()) return;
                 cache.clear();
                 for (AppEntry a : result) cache.put(a.key, a);
                 allApps = result;
-                usage = use;
                 boolean recenter = recenterOnNextLoad;
                 recenterOnNextLoad = false;
+                // Re-sort by usage only when the home screen is (re)opened, so stripes don't
+                // shuffle under the finger after every app launch.
+                if (recenter || usage.isEmpty()) usage = use;
                 rearrange(recenter);
             });
         });
@@ -403,13 +430,15 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         List<LauncherActivityInfo> infos = launcherApps.getActivityList(null, user);
         List<AppEntry> list = new ArrayList<>(infos.size());
         for (LauncherActivityInfo info : infos) {
+            ComponentName cn = info.getComponentName();
+            if (cn.getPackageName().equals(getPackageName())) continue;
+            String label;
+            try { label = String.valueOf(info.getLabel()); } catch (RuntimeException e) { label = cn.getPackageName(); }
             try {
-                ComponentName cn = info.getComponentName();
-                if (cn.getPackageName().equals(getPackageName())) continue;
                 String key = cn.flattenToString();
-                String label = String.valueOf(info.getLabel());
                 AppEntry cached = known.get(key);
-                if (cached != null && cached.label.equals(label)) {
+                if (cached != null && cached.label.equals(label)
+                        && cached.icon != null && cached.icon.getWidth() == iconPx) {
                     list.add(cached);
                     continue;
                 }
@@ -419,7 +448,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 int color = ColorExtractor.dominantColor(icon);
                 list.add(new AppEntry(cn, label, icon, color, ColorExtractor.textColorFor(color)));
             } catch (RuntimeException | OutOfMemoryError e) {
-                // One broken app must never crash the home screen.
+                // Broken icon: still show the app, just without an icon.
+                list.add(new AppEntry(cn, label, null, 0xFF808080, 0xFFFFFFFF));
             }
         }
         return list;
