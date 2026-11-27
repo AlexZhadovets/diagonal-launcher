@@ -34,6 +34,9 @@ public class DiagonalView extends View {
     public interface Listener {
         void onLaunch(AppEntry app, View source, Rect bounds);
         void onLongPress(AppEntry app);
+        void onInfoClick();
+        /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
+        void onCornerSwipe(int direction);
     }
 
     public static final int VISIBLE = 5;
@@ -80,6 +83,19 @@ public class DiagonalView extends View {
     private boolean pendingCenter = true;
     private boolean wasFlinging;
 
+    // Swipes along the stripes open the corner panels instead of scrolling.
+    private float downX, downY;
+    private int touchMode;            // 0 undecided, 1 scrolling, 2 corner swipe
+    private final float cornerMin;
+
+    // Centre "info" stripe content.
+    private String infoTitle = "", infoSubtitle = "";
+    private android.graphics.Bitmap infoIcon;
+    private int infoColor = 0xFF16161C, infoText = 0xFFFFFFFF;
+    private final TextPaint infoTitlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint infoSubPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private boolean snapshotMode;
+
     public DiagonalView(Context context) {
         super(context);
         dp = getResources().getDisplayMetrics().density;
@@ -108,6 +124,15 @@ public class DiagonalView extends View {
         edgePaint.setColor(BG);
         flashPaint.setColor(0xFFFFFFFF);
 
+        cornerMin = 56 * dp;
+        Typeface heavy = android.os.Build.VERSION.SDK_INT >= 28
+                ? Typeface.create(Typeface.SANS_SERIF, 900, false)
+                : Typeface.create("sans-serif-black", Typeface.BOLD);
+        infoTitlePaint.setTypeface(heavy);
+        infoTitlePaint.setTextAlign(Paint.Align.LEFT);
+        infoSubPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        infoSubPaint.setTextAlign(Paint.Align.LEFT);
+
         scroller = new OverScroller(context);
         gestures = new GestureDetector(context, new Gestures());
         setHapticFeedbackEnabled(true);
@@ -116,6 +141,36 @@ public class DiagonalView extends View {
     }
 
     public void setListener(Listener l) { listener = l; }
+
+    /** Content of the centre stripe. */
+    public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor) {
+        infoTitle = title == null ? "" : title;
+        infoSubtitle = subtitle == null ? "" : subtitle;
+        infoIcon = icon;
+        infoColor = color;
+        infoText = textColor;
+        invalidate();
+    }
+
+    /** Draws the home screen as it looks on open, for the lock-screen picture. */
+    public void drawSnapshot(Canvas c) {
+        float saved = scroll;
+        scroll = centerScroll();
+        snapshotMode = true;
+        draw(c);
+        snapshotMode = false;
+        scroll = saved;
+    }
+
+    /** Identifies what the home screen looks like (apps and colours), to skip identical snapshots. */
+    public int homeSignature() {
+        int h = 17;
+        for (int i = Math.max(0, favStart - 3); i < Math.min(items.size(), favEnd + 3); i++) {
+            h = h * 31 + items.get(i).key.hashCode();
+            h = h * 31 + items.get(i).color;
+        }
+        return h;
+    }
 
     public void setEmptyText(String text) { emptyText = text; invalidate(); }
 
@@ -181,6 +236,8 @@ public class DiagonalView extends View {
         iconSize = Math.min(band * 0.5f, 96 * dp);
         iconGap = Math.max(12 * dp, band * 0.1f);
         float ts = Math.max(18 * dp, Math.min(band * 0.19f, 34 * dp));
+        infoTitlePaint.setTextSize(Math.max(28 * dp, Math.min(band * 0.36f, 64 * dp)));
+        infoSubPaint.setTextSize(Math.max(14 * dp, Math.min(band * 0.12f, 20 * dp)));
         if (ts != textSizeUsed) {
             textSizeUsed = ts;
             textPaint.setTextSize(ts);
@@ -243,7 +300,8 @@ public class DiagonalView extends View {
         canvas.rotate(45f);
         for (int i = first; i <= last; i++) {
             AppEntry a = items.get(i);
-            drawStripe(canvas, a, slotS(i));
+            if (a.info) drawInfoStripe(canvas, slotS(i));
+            else drawStripe(canvas, a, slotS(i));
             if (a.key.equals(flashKey)) drawFlash(canvas, slotS(i));
         }
         if (flashKey != null) {
@@ -254,7 +312,7 @@ public class DiagonalView extends View {
         // Thin, slightly greyer seam where two neighbouring stripes have the same colour.
         float far = S * 2f, seam = 2.5f * dp;
         for (int i = first; i < last; i++) {
-            int a = items.get(i).color, b = items.get(i + 1).color;
+            int a = colorOf(items.get(i)), b = colorOf(items.get(i + 1));
             if (ColorExtractor.dist(a, b) > 60) continue;
             float s = (i + 1) * spacing - scroll;
             seamPaint.setColor(ColorExtractor.seamColor(a));
@@ -267,6 +325,53 @@ public class DiagonalView extends View {
             if (favEnd < n) drawEdge(canvas, favEnd * spacing - scroll, labelAlpha);
         }
         canvas.restore();
+    }
+
+    private int colorOf(AppEntry a) { return a.info ? infoColor : a.color; }
+
+    private void drawInfoStripe(Canvas canvas, float s) {
+        float half = band / 2f, far = screenS() * 2f;
+        tmpRect.set(s - half, -far, s + half, far);
+        bandPaint.setColor(infoColor);
+        canvas.drawRect(tmpRect, bandPaint);
+        if (snapshotMode) return;
+
+        visibleT(s);
+        float tMin = tRange[0] + capMargin, tMax = tRange[1] - capMargin;
+        float mid = (tMin + tMax) / 2f;
+        float iconW = infoIcon != null ? iconSize + iconGap : 0f;
+        float avail = (tMax - tMin) - 2 * iconGap - iconW;
+        if (avail < 40 * dp) return;
+        infoTitlePaint.setColor(infoText);
+        infoSubPaint.setColor(infoText);
+        infoSubPaint.setAlpha(200);
+        CharSequence t = fit(infoTitle, infoTitlePaint, avail);
+        CharSequence st = fit(infoSubtitle, infoSubPaint, avail);
+        float tw = infoTitlePaint.measureText(t, 0, t.length());
+        float sw = infoSubPaint.measureText(st, 0, st.length());
+        float blockW = iconW + Math.max(tw, sw);
+
+        Paint.FontMetrics a = infoTitlePaint.getFontMetrics();
+        Paint.FontMetrics b = infoSubPaint.getFontMetrics();
+        float titleH = a.descent - a.ascent, subH = st.length() > 0 ? b.descent - b.ascent : 0f;
+        float top = -(titleH + subH) / 2f;
+
+        canvas.save();
+        canvas.rotate(-90f, s, mid);
+        float x0 = s - blockW / 2f;
+        if (infoIcon != null) {
+            iconRect.set(x0, mid - iconSize / 2f, x0 + iconSize, mid + iconSize / 2f);
+            canvas.drawBitmap(infoIcon, null, iconRect, iconPaint);
+        }
+        float tx = x0 + iconW;
+        canvas.drawText(t, 0, t.length(), tx, mid + top - a.ascent, infoTitlePaint);
+        if (st.length() > 0) canvas.drawText(st, 0, st.length(), tx, mid + top + titleH - b.ascent, infoSubPaint);
+        canvas.restore();
+    }
+
+    private static CharSequence fit(String text, TextPaint p, float avail) {
+        if (p.measureText(text) <= avail) return text;
+        return TextUtils.ellipsize(text, p, avail, TextUtils.TruncateAt.END);
     }
 
     private void drawFlash(Canvas canvas, float s) {
@@ -364,6 +469,12 @@ public class DiagonalView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         boolean handled = gestures.onTouchEvent(e);
+        int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_UP && touchMode == 2) {
+            float along = ((e.getX() - downX) - (e.getY() - downY)) * INV_SQRT2; // + = towards top-right
+            if (Math.abs(along) >= cornerMin && listener != null) listener.onCornerSwipe(along > 0 ? 1 : -1);
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) touchMode = 0;
         return handled || super.onTouchEvent(e);
     }
 
@@ -397,10 +508,19 @@ public class DiagonalView extends View {
         @Override public boolean onDown(MotionEvent e) {
             wasFlinging = !scroller.isFinished();
             scroller.forceFinished(true);
+            downX = e.getX();
+            downY = e.getY();
+            touchMode = 0;
             return true;
         }
 
         @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
+            if (touchMode == 0) {
+                float tx = e2.getX() - downX, ty = e2.getY() - downY;
+                float along = Math.abs(tx - ty), across = Math.abs(tx + ty);
+                touchMode = along > across * 1.3f ? 2 : 1;
+            }
+            if (touchMode == 2) return true;   // swipe along the stripes: corner panel
             scroll += (dx + dy) * INV_SQRT2;
             clampScroll();
             invalidate();
@@ -408,6 +528,7 @@ public class DiagonalView extends View {
         }
 
         @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
+            if (touchMode == 2) return true;
             int v = Math.round(-(vx + vy) * INV_SQRT2);
             scroller.fling(Math.round(scroll), 0, v, 0,
                     Math.round(minScroll()), Math.round(maxScroll()), 0, 0);
@@ -419,6 +540,7 @@ public class DiagonalView extends View {
             if (wasFlinging) return true;            // a tap during a fling only stops it
             int i = indexAt(e.getX(), e.getY());
             if (i < 0 || listener == null) return false;
+            if (items.get(i).info) { listener.onInfoClick(); return true; }
             int r = Math.round(band / 2f);
             Rect bounds = new Rect(Math.round(e.getX()) - r, Math.round(e.getY()) - r,
                     Math.round(e.getX()) + r, Math.round(e.getY()) + r);
@@ -428,7 +550,7 @@ public class DiagonalView extends View {
 
         @Override public void onLongPress(MotionEvent e) {
             int i = indexAt(e.getX(), e.getY());
-            if (i < 0 || listener == null) return;
+            if (i < 0 || listener == null || items.get(i).info) return;
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
             listener.onLongPress(items.get(i));
         }

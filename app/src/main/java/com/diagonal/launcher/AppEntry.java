@@ -11,6 +11,8 @@ final class AppEntry {
     final int color;
     final int textColor;
     final String key;
+    /** The smart centre stripe (clock / weather / notification / music), not an app. */
+    final boolean info;
 
     // Text-measurement cache used by DiagonalView (UI thread only).
     float labelWidth = -1f;
@@ -25,5 +27,16 @@ final class AppEntry {
         this.color = color;
         this.textColor = textColor;
         this.key = component.flattenToString();
+        this.info = false;
+    }
+
+    AppEntry(ComponentName placeholder) {
+        this.component = placeholder;
+        this.label = "";
+        this.icon = null;
+        this.color = 0xFF16161C;
+        this.textColor = 0xFFFFFFFF;
+        this.key = "info";
+        this.info = true;
     }
 }

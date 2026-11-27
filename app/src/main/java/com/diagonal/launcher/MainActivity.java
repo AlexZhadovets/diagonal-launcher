@@ -39,6 +39,10 @@ import android.view.WindowInsets;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.view.MotionEvent;
+import android.view.WindowInsetsController;
+import android.app.WallpaperManager;
+import android.graphics.Color;
 
 import java.text.Collator;
 import java.util.ArrayList;
@@ -53,7 +57,13 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity implements DiagonalView.Listener {
 
-    private static final int HOME_SLOTS = DiagonalView.VISIBLE;
+    private static final int HOME_SLOTS = 4;   // + the smart stripe in the middle
+    private static final String KEY_HIDE_STATUS = "hide_status";
+    private static final String KEY_LOCK_SNAPSHOT = "lock_snapshot";
+    private static final String KEY_ASKED_NOTIF = "asked_notif";
+    private static final String KEY_ASKED_LOCATION = "asked_location";
+    private static final String KEY_SNAPSHOT_SIG = "snapshot_sig";
+    private static final int REQ_LOCATION = 43;
     private static final String PREFS = "diagonal";
     private static final String KEY_FAV = "favorites";
     private static final String KEY_ASKED_USAGE = "asked_usage";
@@ -81,12 +91,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private Map<String, Long> usage = new HashMap<>();
     private AppEntry[] lastHome = new AppEntry[HOME_SLOTS];
     private AlertDialog shownDialog;
+    private InfoHub info;
+    private Panels panels;
+    private AppEntry infoEntry;
+    private Bitmap lastArt, lastArtScaled;
+    private int lastArtColor = 0xFF16161C;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         launcherApps = getSystemService(LauncherApps.class);
+        info = new InfoHub(this);
+        info.setListener(this::updateInfoStripe);
+        infoEntry = new AppEntry(new ComponentName(getPackageName(), "info"));
         goEdgeToEdge();
 
         float dp = getResources().getDisplayMetrics().density;
@@ -131,6 +149,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         hp.setMargins(margin, margin, margin, margin);
         root.addView(homeButton, hp);
 
+        panels = new Panels(this, root, info, prefs);
         buildSearch(root, dp);
 
         root.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -142,6 +161,14 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                     ? insets.getInsets(WindowInsets.Type.ime() | WindowInsets.Type.navigationBars()).bottom
                     : insets.getSystemWindowInsetBottom();
             searchLayer.setPadding(0, insets.getSystemWindowInsetTop(), 0, bottom);
+            int cutTop = Build.VERSION.SDK_INT >= 28 && insets.getDisplayCutout() != null
+                    ? insets.getDisplayCutout().getSafeInsetTop() : 0;
+            panels.setInsets(Math.max(insets.getSystemWindowInsetTop(), cutTop),
+                    insets.getSystemWindowInsetBottom());
+            if (sp.topMargin < cutTop + Math.round(6 * dp)) {
+                sp.topMargin = cutTop + Math.round(6 * dp);
+                searchButton.setLayoutParams(sp);
+            }
             FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) backButton.getLayoutParams();
             boolean rtl = v.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
             p.bottomMargin = margin + insets.getSystemWindowInsetBottom();
@@ -160,19 +187,180 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        info.start();
+        panels.onStart();
+    }
+
+    @Override
     protected void onStop() {
         super.onStop();
+        info.stop();
+        panels.onStop();
+        if (panels.expectingResult) return;   // adding a widget: keep everything as it is
         // Leaving for another app: be back at the start when the user returns.
         closeSearch();
+        panels.closeAll();
         recenterOnNextLoad = true;
         diagonal.jumpToCenter();
+        maybeSnapshotLockScreen();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        applySystemBars();
         loadApps();                    // usage times change while other apps run
-        maybeAskForUsageAccess();
+        panels.refreshTiles();
+        info.refresh();
+        askFirstRunPermissions();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) applySystemBars();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (!isSearchOpen() && panels.dispatch(ev)) return true;
+        return super.dispatchTouchEvent(ev);
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == Panels.REQ_BIND || requestCode == Panels.REQ_CONFIG) {
+            panels.onActivityResult(requestCode, resultCode, data);
+        }
+    }
+
+    // ---- corner panels & centre stripe ---------------------------------
+
+    @Override
+    public void onCornerSwipe(int direction) { panels.onCornerSwipe(direction); }
+
+    @Override
+    public void onInfoClick() {
+        if (info.media != null) { info.playPause(); return; }
+        if (info.notif != null) { info.openNotification(); return; }
+        if (!info.hasNotificationAccess()) { openNotificationAccess(); return; }
+        startFirst(new Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS));
+    }
+
+    /** Music that plays > newest notification > clock + weather. */
+    private void updateInfoStripe() {
+        InfoHub.Media m = info.media;
+        InfoHub.Notif n = info.notif;
+        if (m != null) {
+            if (m.art != lastArt) {
+                lastArt = m.art;
+                lastArtScaled = m.art == null ? null : Bitmap.createScaledBitmap(m.art, 96, 96, true);
+                lastArtColor = lastArtScaled == null ? 0xFF26262E : ColorExtractor.analyze(lastArtScaled).color;
+            }
+            int c = lastArtColor;
+            diagonal.setInfo(m.title, (m.playing ? "" : "⏸  ") + m.artist, lastArtScaled, c, ColorExtractor.textColorFor(c));
+        } else if (n != null) {
+            AppEntry app = null;
+            for (AppEntry a : allApps) if (a.component.getPackageName().equals(n.pkg)) { app = a; break; }
+            int c = app != null ? app.color : 0xFF26262E;
+            int tc = app != null ? app.textColor : 0xFFFFFFFF;
+            String title = n.title.isEmpty() ? (app != null ? app.label : "") : n.title;
+            diagonal.setInfo(title, n.text, app != null ? app.icon : null, c, tc);
+        } else {
+            String sub = info.date();
+            if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
+            diagonal.setInfo(info.time(), sub, null, 0xFF16161C, 0xFFFFFFFF);
+        }
+        panels.updateCards();
+    }
+
+    void openNotificationAccess() {
+        startFirst(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+    }
+
+    void showDialog(AlertDialog.Builder b) { shownDialog = b.show(); }
+
+    /** Launcher settings (the "Діагональ" tile in the big quick panel). */
+    void showLauncherSettings() {
+        String[] items = {getString(R.string.set_hide_status), getString(R.string.set_lock_snapshot)};
+        boolean[] checked = {prefs.getBoolean(KEY_HIDE_STATUS, true), prefs.getBoolean(KEY_LOCK_SNAPSHOT, false)};
+        shownDialog = dialog().setTitle(R.string.app_name)
+                .setMultiChoiceItems(items, checked, (d, which, on) -> {
+                    if (which == 0) { prefs.edit().putBoolean(KEY_HIDE_STATUS, on).apply(); applySystemBars(); }
+                    else {
+                        prefs.edit().putBoolean(KEY_LOCK_SNAPSHOT, on).putInt(KEY_SNAPSHOT_SIG, 0).apply();
+                    }
+                })
+                .setNeutralButton(R.string.set_notif_access, (d, w) -> openNotificationAccess())
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applySystemBars() {
+        boolean hide = prefs.getBoolean(KEY_HIDE_STATUS, true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c == null) return;
+            if (hide) {
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                c.hide(WindowInsets.Type.statusBars());
+            } else {
+                c.show(WindowInsets.Type.statusBars());
+            }
+        } else {
+            int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+            if (hide) flags |= View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
+    }
+
+    /** Puts a picture of the home screen on the lock screen (when switched on in settings). */
+    private void maybeSnapshotLockScreen() {
+        if (!prefs.getBoolean(KEY_LOCK_SNAPSHOT, false)) return;
+        int w = diagonal.getWidth(), h = diagonal.getHeight();
+        if (w == 0 || h == 0) return;
+        int sig = diagonal.homeSignature() * 31 + w * 7 + h;
+        if (sig == prefs.getInt(KEY_SNAPSHOT_SIG, 0)) return;
+        prefs.edit().putInt(KEY_SNAPSHOT_SIG, sig).apply();
+        Bitmap bmp;
+        try {
+            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            diagonal.drawSnapshot(new Canvas(bmp));
+        } catch (RuntimeException | OutOfMemoryError e) {
+            return;
+        }
+        final Bitmap pic = bmp;
+        final WallpaperManager wm = WallpaperManager.getInstance(getApplicationContext());
+        worker.execute(() -> {
+            try { wm.setBitmap(pic, null, true, WallpaperManager.FLAG_LOCK); } catch (Exception ignored) { }
+        });
+    }
+
+    /** One question per visit: usage access, then notification access, then location (weather). */
+    private void askFirstRunPermissions() {
+        if (shownDialog != null && shownDialog.isShowing()) return;
+        if (!prefs.getBoolean(KEY_ASKED_USAGE, false) && !hasUsageAccess()) { maybeAskForUsageAccess(); return; }
+        if (!prefs.getBoolean(KEY_ASKED_NOTIF, false) && !info.hasNotificationAccess()) {
+            prefs.edit().putBoolean(KEY_ASKED_NOTIF, true).apply();
+            shownDialog = dialog().setTitle(R.string.notif_title)
+                    .setMessage(R.string.notif_message)
+                    .setPositiveButton(R.string.usage_allow, (d, w) -> openNotificationAccess())
+                    .setNegativeButton(R.string.later, null)
+                    .show();
+            return;
+        }
+        if (!prefs.getBoolean(KEY_ASKED_LOCATION, false)
+                && checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putBoolean(KEY_ASKED_LOCATION, true).apply();
+            requestPermissions(new String[]{android.Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+        }
     }
 
     @Override
@@ -190,6 +378,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         if (Intent.ACTION_MAIN.equals(intent.getAction()) && diagonal != null) {
             if (shownDialog != null && shownDialog.isShowing()) shownDialog.dismiss();
             closeSearch();
+            panels.closeAll();
             if (hasWindowFocus()) {
                 diagonal.animateToCenter();
             } else {
@@ -203,6 +392,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     @Override
     public void onBackPressed() {
         if (isSearchOpen()) closeSearch();
+        else if (panels.isOpen()) panels.closeAll();
         else if (diagonal != null) diagonal.animateToCenter(); // Back = return to the middle
     }
 
@@ -344,7 +534,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 new Intent(Settings.ACTION_SETTINGS));
     }
 
-    private void startFirst(Intent... candidates) {
+    void startFirst(Intent... candidates) {
         for (Intent i : candidates) {
             try {
                 startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -528,6 +718,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         lastHome = home;
         List<AppEntry> favs = new ArrayList<>();
         for (AppEntry a : home) if (a != null) favs.add(a);
+        favs.add(Math.min(2, favs.size()), infoEntry);   // smart stripe in the very middle
 
         List<AppEntry> usageSide = new ArrayList<>();
         for (AppEntry a : byUsage) if (!taken.contains(a.key)) usageSide.add(a);

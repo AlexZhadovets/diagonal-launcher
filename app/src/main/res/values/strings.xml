@@ -20,4 +20,9 @@
     <string name="search">Пошук</string>
     <string name="search_hint">Знайти програму</string>
     <string name="to_home">На початок</string>
+    <string name="set_hide_status">Ховати рядок стану</string>
+    <string name="set_lock_snapshot">Робочий стіл на екрані блокування (шпалери)</string>
+    <string name="set_notif_access">Доступ до сповіщень</string>
+    <string name="notif_title">Музика і сповіщення</string>
+    <string name="notif_message">Щоб центральна смуга показувала музику, що грає, і нові повідомлення, дозволь «Діагоналі» доступ до сповіщень. Без цього там буде годинник і погода.</string>
 </resources>
