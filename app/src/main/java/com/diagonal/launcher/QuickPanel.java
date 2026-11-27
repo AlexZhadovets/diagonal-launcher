@@ -79,6 +79,8 @@ public class QuickPanel extends View {
                 return true;
             }
         });
+        gestures.setOnDoubleTapListener(null);   // quick taps on tiles must each count
+        gestures.setIsLongpressEnabled(false);
         setVisibility(INVISIBLE);   // laid out from the start, so the first swipe already has a size
     }
 

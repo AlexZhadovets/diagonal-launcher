@@ -110,6 +110,7 @@ final class InfoHub {
         started = false;
         try { ctx.unregisterReceiver(tick); } catch (RuntimeException ignored) { }
         NotifService.onChange = null;
+        main.removeCallbacks(expire);
         unwatchSessions();
     }
 
@@ -122,7 +123,7 @@ final class InfoHub {
         return s != null && s.contains(listenerCn.flattenToString());
     }
 
-    void destroy() { net.shutdownNow(); }
+    void destroy() { main.removeCallbacks(expire); net.shutdownNow(); }
 
     void resetWeather() { weatherAt = 0; }
 
@@ -231,7 +232,13 @@ final class InfoHub {
     }
 
     void playPause() {
-        if (media == null || media.controller == null) return;
+        if (media == null || media.controller == null) {
+            // nothing active: ask the last music app to resume
+            android.media.AudioManager am = ctx.getSystemService(android.media.AudioManager.class);
+            am.dispatchMediaKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PLAY));
+            am.dispatchMediaKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PLAY));
+            return;
+        }
         try {
             if (media.playing) media.controller.getTransportControls().pause();
             else media.controller.getTransportControls().play();
@@ -313,6 +320,7 @@ final class InfoHub {
     // ---- weather (Open-Meteo, no key needed) -----------------------------
 
     private void fetchWeather() {
+        if (net.isShutdown()) return;
         weatherAt = System.currentTimeMillis();
         double[] ll = location();
         net.execute(() -> {

@@ -39,8 +39,7 @@ public class WidgetPanel extends FrameLayout {
         edge.setStrokeWidth(1.5f * dp);
         setWillNotDraw(false);
         setVisibility(INVISIBLE);   // laid out from the start, so the first swipe already has a size
-        setClickable(true);
-        setOnClickListener(v -> { if (onEmptyTap != null) onEmptyTap.run(); });
+
     }
 
     public void setOnEmptyTap(Runnable r) { onEmptyTap = r; }
@@ -51,9 +50,16 @@ public class WidgetPanel extends FrameLayout {
 
     public boolean contains(float x, float y) { return level > 0 && x + (getHeight() - y) <= legs; }
 
+    private float level1Legs(int w) {
+        // just enough for the bottom card (≈128dp tall) to be ≈300dp wide
+        int first = getChildCount() > 0 ? getChildAt(0).getLayoutParams().height : Math.round(128 * dp);
+        float want = insetBottom + 12 * dp + first + 300 * dp + 24 * dp;
+        return Math.min(want, w + first);
+    }
+
     private float targetLegs(int lvl) {
         if (lvl == 0) return 0f;
-        return lvl == 1 ? getWidth() * 0.95f : getWidth() + getHeight() + 50 * dp;
+        return lvl == 1 ? level1Legs(getWidth()) : getWidth() + getHeight() + 50 * dp;
     }
 
     public void setLevel(int newLevel) {
@@ -89,17 +95,24 @@ public class WidgetPanel extends FrameLayout {
     protected void onMeasure(int wSpec, int hSpec) {
         int w = MeasureSpec.getSize(wSpec), h = MeasureSpec.getSize(hSpec);
         setMeasuredDimension(w, h);
-        float limit = w * 0.95f;
-        if (level == 2) limit = w + h + 50 * dp;
+        float limit = level == 2 ? w + h + 50 * dp : level1Legs(w);
         int pad = Math.round(12 * dp);
         int minW = Math.round(150 * dp);
         int b = insetBottom + pad;              // distance of the next card's bottom from the screen bottom
+        boolean stop = false;
         for (int i = 0; i < getChildCount(); i++) {
             View c = getChildAt(i);
             int ch = c.getLayoutParams().height;
+            if (stop) {   // keep the order: once a card doesn't fit, none above it shows
+                c.setTag(R.id.hidden_card, Boolean.TRUE);
+                c.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.EXACTLY),
+                        MeasureSpec.makeMeasureSpec(0, MeasureSpec.EXACTLY));
+                continue;
+            }
             int top = b + ch;
             int cw = Math.round(Math.min(w - 2 * pad, limit - top - 2 * pad));
             if (cw < minW || h - top < insetTop) {
+                stop = true;
                 c.setTag(R.id.hidden_card, Boolean.TRUE);
                 c.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.EXACTLY),
                         MeasureSpec.makeMeasureSpec(0, MeasureSpec.EXACTLY));
@@ -147,6 +160,21 @@ public class WidgetPanel extends FrameLayout {
         super.dispatchDraw(canvas);
         canvas.restore();
         canvas.drawLine(legs, getHeight(), 0, getHeight() - legs, edge);
+    }
+
+    private float downX, downY;
+
+    /** Only a real tap (no drag) on empty space, not on a card, steps the window back. */
+    @Override
+    public boolean onTouchEvent(MotionEvent e) {
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN) { downX = e.getX(); downY = e.getY(); }
+        if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+            float slop = android.view.ViewConfiguration.get(getContext()).getScaledTouchSlop();
+            if (Math.abs(e.getX() - downX) < slop && Math.abs(e.getY() - downY) < slop && onEmptyTap != null) {
+                onEmptyTap.run();
+            }
+        }
+        return true;
     }
 
     @Override

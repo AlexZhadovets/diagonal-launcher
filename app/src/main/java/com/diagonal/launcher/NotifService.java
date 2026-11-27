@@ -29,10 +29,31 @@ public class NotifService extends NotificationListenerService {
     @Override public void onListenerDisconnected() { instance = null; changed(); }
 
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
+        if (!worthShowing(sbn)) return;
+        StatusBarNotification prev = lastPosted;
+        if (prev != null && prev.getKey().equals(sbn.getKey())
+                && (sbn.getNotification().flags & android.app.Notification.FLAG_ONLY_ALERT_ONCE) != 0) {
+            return; // silent update of the same notification
+        }
         lastPosted = sbn;
         lastPostedAt = System.currentTimeMillis();
         changed();
     }
 
-    @Override public void onNotificationRemoved(StatusBarNotification sbn) { changed(); }
+    private boolean worthShowing(StatusBarNotification sbn) {
+        android.app.Notification n = sbn.getNotification();
+        if (n == null || sbn.isOngoing() || !sbn.isClearable()) return false;
+        if (sbn.getPackageName().equals(getPackageName())) return false;
+        if ((n.flags & android.app.Notification.FLAG_GROUP_SUMMARY) != 0) return false;
+        if (android.app.Notification.CATEGORY_TRANSPORT.equals(n.category)) return false;
+        CharSequence t = n.extras == null ? null : n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE);
+        CharSequence x = n.extras == null ? null : n.extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
+        return (t != null && t.length() > 0) || (x != null && x.length() > 0);
+    }
+
+    @Override public void onNotificationRemoved(StatusBarNotification sbn) {
+        StatusBarNotification cur = lastPosted;
+        if (cur != null && cur.getKey().equals(sbn.getKey())) lastPosted = null;
+        changed();
+    }
 }

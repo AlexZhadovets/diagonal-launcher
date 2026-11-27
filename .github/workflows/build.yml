@@ -28,7 +28,19 @@ jobs:
           gradle-version: '8.14.3'
 
       - name: Build release APK
-        run: gradle --no-daemon assembleRelease
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon assembleRelease 2>&1 | tee build.log
+
+      # Surface compiler / lint errors as public annotations (logs need sign-in to read).
+      - name: Report build errors
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "error:|e: |Error:|Lint found|What went wrong|\.java:[0-9]+" build.log | head -40 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk diagonal-launcher.apk

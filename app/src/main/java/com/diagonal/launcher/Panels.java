@@ -133,7 +133,11 @@ final class Panels {
         }
     };
 
+    private volatile boolean destroyed;
+
     void onDestroy() {
+        destroyed = true;
+        shortcutWorker.shutdownNow();
         try { act.getSystemService(CameraManager.class).unregisterTorchCallback(torchCallback); }
         catch (RuntimeException ignored) { }
     }
@@ -416,6 +420,7 @@ final class Panels {
         chats.setOrientation(LinearLayout.VERTICAL);
         chats.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
         chats.setBackground(cardBg(0xFF1E2433));
+        chats.setClickable(true);
         TextView chatsTitle = text(12, 0x99FFFFFF, true);
         chatsTitle.setText("ЧАТИ");
         chatsTitle.setLetterSpacing(0.15f);
@@ -426,13 +431,14 @@ final class Panels {
         chatHint = text(13, 0xAAFFFFFF, false);
         chats.addView(chatRow);
         chats.addView(chatHint);
-        widgets.addView(chats, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(118 * dp)));
+        widgets.addView(chats, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(124 * dp)));
 
         // Claude: ask box + Claude's own shortcuts
         LinearLayout claude = new LinearLayout(act);
         claude.setOrientation(LinearLayout.VERTICAL);
         claude.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
         claude.setBackground(cardBg(0xFFC96442));
+        claude.setClickable(true);
         TextView claudeTitle = text(12, 0xCCFFFFFF, true);
         claudeTitle.setText("CLAUDE");
         claudeTitle.setLetterSpacing(0.15f);
@@ -530,6 +536,8 @@ final class Panels {
 
     // ---- shortcuts: chats + Claude chips ---------------------------------
 
+    private volatile boolean perPackageTried, usePerPackage;
+
     private static final class Sc {
         android.content.pm.ShortcutInfo info;
         android.graphics.Bitmap icon;
@@ -540,6 +548,7 @@ final class Panels {
         final android.content.pm.LauncherApps la = act.getSystemService(android.content.pm.LauncherApps.class);
         final int density = act.getResources().getDisplayMetrics().densityDpi;
         final int iconPx = Math.round(46 * dp);
+        if (destroyed || shortcutWorker.isShutdown()) return;
         shortcutWorker.execute(() -> {
             List<Sc> chats = new ArrayList<>();
             List<Sc> claude = new ArrayList<>();
@@ -556,7 +565,8 @@ final class Panels {
                     q.setQueryFlags(flags);
                     List<android.content.pm.ShortcutInfo> got = la.getShortcuts(q, Process.myUserHandle());
                     if (got != null) all.addAll(got);
-                    if (all.isEmpty()) {
+                    if (all.isEmpty() && (usePerPackage || !perPackageTried)) {
+                        perPackageTried = true;
                         // some Android builds want one package per query
                         for (android.content.pm.LauncherActivityInfo ai : la.getActivityList(null, Process.myUserHandle())) {
                             q.setPackage(ai.getComponentName().getPackageName());
@@ -565,6 +575,7 @@ final class Panels {
                                 if (one != null) all.addAll(one);
                             } catch (RuntimeException ignored) { }
                         }
+                        if (!all.isEmpty()) usePerPackage = true;
                     }
                 } catch (RuntimeException ignored) { }
                 all.sort((a, b) -> Long.compare(b.getLastChangedTimestamp(), a.getLastChangedTimestamp()));
@@ -577,13 +588,13 @@ final class Panels {
                         if (claude.size() < 3 && seen.add(si.getId() + pkg)) claude.add(load(la, si, density, iconPx));
                         continue;
                     }
-                    if (chats.size() >= 8 || !isConversation(si)) continue;
+                    if (chats.size() >= 5 || !isConversation(si)) continue;
                     if (!seen.add(pkg + "/" + si.getShortLabel())) continue;
                     chats.add(load(la, si, density, iconPx));
                 }
             }
             final boolean ok = allowed;
-            act.runOnUiThread(() -> showShortcuts(chats, claude, ok));
+            act.runOnUiThread(() -> { if (!destroyed && !act.isDestroyed()) showShortcuts(chats, claude, ok); });
         });
     }
 
@@ -624,6 +635,7 @@ final class Panels {
         if (!allowed) chatHint.setText("Зроби Diagonal головним екраном, щоб бачити чати");
         else if (chats.isEmpty()) chatHint.setText("Месенджери ще не показали останні чати");
         else chatHint.setText("");
+        chatHint.setVisibility(chatHint.getText().length() == 0 ? View.GONE : View.VISIBLE);
         int cell = Math.round(62 * dp);
         for (Sc s : chats) {
             LinearLayout item = new LinearLayout(act);
@@ -644,7 +656,11 @@ final class Panels {
         claudeChips.removeAllViews();
         List<String> labels = new ArrayList<>();
         List<Runnable> actions = new ArrayList<>();
-        for (Sc s : claude) { labels.add(s.label); actions.add(() -> startShortcut(s.info)); }
+        for (int k = 0; k < Math.min(2, claude.size()); k++) {
+            Sc s = claude.get(k);
+            labels.add(s.label);
+            actions.add(() -> startShortcut(s.info));
+        }
         if (claude.isEmpty()) {
             labels.add("Відкрити Claude");
             actions.add(() -> sendToClaude(""));
@@ -655,6 +671,7 @@ final class Panels {
             chip.setGravity(Gravity.CENTER);
             int hp = Math.round(12 * dp);
             chip.setPadding(hp, 0, hp, 0);
+            chip.setMaxWidth(Math.round(140 * dp));
             GradientDrawable cb = new GradientDrawable();
             cb.setCornerRadius(14 * dp);
             cb.setColor(0x33000000);
