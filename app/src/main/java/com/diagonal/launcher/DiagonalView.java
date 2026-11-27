@@ -418,7 +418,7 @@ public class DiagonalView extends View {
             drawInfoContent(canvas, infoNow, s, tMin, tMax, 1f);
         }
         canvas.restore();
-        if (infoNow.music && infoNow.playing) postInvalidateDelayed(500);   // keep the progress bar moving
+        if (infoNow.music) postInvalidateDelayed(infoNow.playing ? 500 : 15000);   // progress bar + clock
     }
 
     /** Draws one look of the centre stripe in the rotated (reading) frame, centred on x = s. */
@@ -474,6 +474,15 @@ public class DiagonalView extends View {
         drawSkip(canvas, nextX, mid, btn * 0.42f, true);
         drawPlayPause(canvas, playX, mid, btn * 0.5f, c.playing);
 
+        // the current time, always visible on the player (top end, above the controls' row)
+        timePaint.setColor(c.text);
+        timePaint.setAlpha(Math.round(230 * alpha));
+        timePaint.setTextSize(15 * dp);
+        timePaint.setTypeface(infoTitlePaint.getTypeface());
+        String now = nowClock();
+        float nowW = timePaint.measureText(now);
+        canvas.drawText(now, right - gap - nowW, mid - band / 2f + 26 * dp, timePaint);
+
         // progress along the bottom edge, time above its start
         if (mDur > 0) {
             long pos = mPos;
@@ -494,6 +503,19 @@ public class DiagonalView extends View {
             timePaint.setTypeface(infoSubPaint.getTypeface());
             canvas.drawText(clock(pos) + " / " + clock(mDur), bl, by - 7 * dp, timePaint);
         }
+    }
+
+    private long clockMinute = -1;
+    private String clockText = "";
+
+    /** "HH:mm" of right now, rebuilt once a minute. */
+    private String nowClock() {
+        long min = System.currentTimeMillis() / 60000;
+        if (min != clockMinute) {
+            clockMinute = min;
+            clockText = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date());
+        }
+        return clockText;
     }
 
     private static String clock(long ms) {
