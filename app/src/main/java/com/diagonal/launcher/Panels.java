@@ -70,7 +70,8 @@ final class Panels {
     private final List<QuickPanel.Tile> tiles = new ArrayList<>();
     private final GestureDetector outside;
     private boolean downInside;
-    private boolean flung;   // the current gesture was an along-stripe fling (steps a panel)
+    private boolean flung;
+    private boolean inList;   // the current gesture was an along-stripe fling (steps a panel)
 
     // own widgets
     private TextView musicTitle, musicArtist, musicPlay;
@@ -208,8 +209,11 @@ final class Panels {
         if (!isOpen()) return false;
         if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
             downInside = quick.contains(e.getX(), e.getY()) || widgets.contains(e.getX(), e.getY());
+            inList = notifList.getVisibility() == View.VISIBLE && e.getY() >= notifList.getTop()
+                    && quick.contains(e.getX(), e.getY());
             flung = false;
         }
+        if (inList) return false;   // the list has its own swipes (dismiss) and scrolling
         outside.onTouchEvent(e);
         if (flung && downInside) {
             MotionEvent cancel = MotionEvent.obtain(e);
@@ -239,10 +243,13 @@ final class Panels {
             }
             @Override public void dismiss(List<NotifList.Item> items) {
                 NotifService svc = NotifService.instance;
-                if (svc == null) return;
-                for (NotifList.Item it : items) {
-                    try { svc.cancelNotification(it.key); } catch (RuntimeException ignored) { }
+                if (svc != null) {
+                    for (NotifList.Item it : items) {
+                        try { svc.cancelNotification(it.key); } catch (RuntimeException ignored) { }
+                    }
                 }
+                notifSignature = "";            // resync either way (card stays gone only if it really went)
+                notifList.post(() -> refreshNotifications());
             }
             @Override public void clearAll() { clearNotifications(); }
             @Override public String clearLabel() { return act.getString(R.string.clear_all); }
@@ -251,7 +258,18 @@ final class Panels {
         notifList.attachShape(quick);
         quick.setOnShapeChange(() -> {
             boolean show = quick.level() == 2;
-            if (show != (notifList.getVisibility() == View.VISIBLE)) notifList.setVisibility(show ? View.VISIBLE : View.GONE);
+            if (show != (notifList.getVisibility() == View.VISIBLE)) {
+                notifList.setVisibility(show ? View.VISIBLE : View.GONE);
+                if (!show) {
+                    View f = notifList.findFocus();
+                    if (f != null) {
+                        act.getSystemService(android.view.inputmethod.InputMethodManager.class)
+                                .hideSoftInputFromWindow(f.getWindowToken(), 0);
+                        f.clearFocus();
+                    }
+                    notifList.applyPending();
+                }
+            }
             if (show) {
                 int top = Math.round(quick.tilesEnd());
                 FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) notifList.getLayoutParams();
@@ -278,22 +296,27 @@ final class Panels {
                 if (n == null || sbn.isOngoing() || !sbn.isClearable()) continue;
                 if ((n.flags & android.app.Notification.FLAG_GROUP_SUMMARY) != 0) continue;
                 if (sbn.getPackageName().equals(act.getPackageName())) continue;
+                if (android.app.Notification.CATEGORY_TRANSPORT.equals(n.category)) continue;
                 list.add(sbn);
             }
             list.sort((a, b) -> Long.compare(b.getPostTime(), a.getPostTime()));
             for (android.service.notification.StatusBarNotification sbn : list) {
+                sig.append(sbn.getKey()).append('@').append(sbn.getPostTime()).append(';');
+            }
+            String s = sig.toString();
+            if (s.equals(notifSignature)) return;   // nothing changed: don't rebuild (keeps a reply being typed)
+            notifSignature = s;
+            for (android.service.notification.StatusBarNotification sbn : list) {
                 NotifList.Item it = NotifList.from(act, sbn);
                 if (it.title.isEmpty() && it.text.isEmpty()) continue;
                 out.add(it);
-                sig.append(it.key).append('@').append(sbn.getPostTime()).append(';');
             }
+        } else {
+            if (notifSignature.isEmpty()) return;
+            notifSignature = "";
         }
         quick.setHasNotifications(!out.isEmpty());
-        String s = sig.toString();
-        if (!s.equals(notifSignature)) {      // don't rebuild (and lose a reply being typed) for no reason
-            notifSignature = s;
-            notifList.setItems(out);
-        }
+        notifList.setItems(out);
     }
 
     private void clearNotifications() {

@@ -125,7 +125,16 @@ public class NotifList extends ScrollView {
 
     // ---- content -----------------------------------------------------------
 
+    private List<Item> pending;
+
+    /** Applies an update that arrived while a reply was being typed. */
+    void applyPending() {
+        if (pending != null) { List<Item> p = pending; pending = null; setItems(p); }
+    }
+
     void setItems(List<Item> items) {
+        if (findFocus() instanceof EditText) { pending = items; return; }   // don't throw away a reply in progress
+        pending = null;
         column.removeAllViews();
         Map<String, List<Item>> groups = new LinkedHashMap<>();
         for (Item it : items) {
@@ -197,6 +206,7 @@ public class NotifList extends ScrollView {
             chev.setOnClickListener(v -> {
                 if (expanded.contains(head.pkg)) expanded.remove(head.pkg); else expanded.add(head.pkg);
                 int i = column.indexOfChild(swipeParent(card));
+                if (i < 0) return;
                 column.removeViewAt(i);
                 column.addView(groupView(group), i);
             });
@@ -264,7 +274,7 @@ public class NotifList extends ScrollView {
                 int hp = Math.round(10 * dp);
                 btn.setPadding(hp, Math.round(6 * dp), hp, Math.round(6 * dp));
                 btn.setOnClickListener(v -> {
-                    if (a.inputs != null && a.inputs.length > 0) showReply(box, acts, it, a, accent);
+                    if (freeForm(a) != null) showReply(box, acts, it, a, accent);
                     else send(a.intent, null);
                 });
                 acts.addView(btn);
@@ -302,14 +312,20 @@ public class NotifList extends ScrollView {
         Runnable go = () -> {
             String msg = field.getText().toString().trim();
             if (msg.isEmpty()) return;
+            RemoteInput[] inputs = freeForm(a);
             Bundle results = new Bundle();
-            for (RemoteInput ri : a.inputs) results.putCharSequence(ri.getResultKey(), msg);
+            for (RemoteInput ri : inputs) results.putCharSequence(ri.getResultKey(), msg);
             Intent fill = new Intent();
-            RemoteInput.addResultsToIntent(a.inputs, fill, results);
+            RemoteInput.addResultsToIntent(inputs, fill, results);
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                RemoteInput.setResultsSource(fill, RemoteInput.SOURCE_FREE_FORM_INPUT);
+            }
             send(a.intent, fill);
             hideKeyboard(field);
+            field.clearFocus();
             reply.setVisibility(GONE);
             actions.setVisibility(VISIBLE);
+            post(this::applyPending);
         };
         sendBtn.setOnClickListener(v -> go.run());
         field.setOnEditorActionListener((v, id, ev) -> { go.run(); return true; });
@@ -317,6 +333,18 @@ public class NotifList extends ScrollView {
         field.requestFocus();
         field.post(() -> getContext().getSystemService(android.view.inputmethod.InputMethodManager.class)
                 .showSoftInput(field, 0));
+    }
+
+    /** The text inputs of an action (choice-only / data-only inputs are left out). */
+    private static RemoteInput[] freeForm(Action a) {
+        if (a.inputs == null) return null;
+        List<RemoteInput> out = new ArrayList<>();
+        for (RemoteInput ri : a.inputs) {
+            if (!ri.getAllowFreeFormInput()) continue;
+            if (android.os.Build.VERSION.SDK_INT >= 29 && ri.isDataOnly()) continue;
+            out.add(ri);
+        }
+        return out.isEmpty() ? null : out.toArray(new RemoteInput[0]);
     }
 
     private void hideKeyboard(View v) {

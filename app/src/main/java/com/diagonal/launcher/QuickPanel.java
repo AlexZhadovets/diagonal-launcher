@@ -153,6 +153,7 @@ public class QuickPanel extends View {
     public float tilesEnd() { return tilesBottom(); }
 
     private boolean hasNotifications;
+    private int fullHeight;   // height without the keyboard, so typing a reply doesn't shrink the triangle
     private Runnable onShapeChange;
 
     public void setOnShapeChange(Runnable r) { onShapeChange = r; }
@@ -197,6 +198,7 @@ public class QuickPanel extends View {
     @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
         super.onSizeChanged(w, h, ow, oh);
+        if (w != ow) fullHeight = h; else fullHeight = Math.max(fullHeight, h);
         layoutCells();
     }
 
@@ -244,7 +246,7 @@ public class QuickPanel extends View {
         float tilesOnly = legsFor(tiles.size());
         if (!hasNotifications) return tilesOnly;
         // like the Android shade: room for the list, the diagonal edge only cuts the far corner
-        return Math.max(tilesOnly, getWidth() + getHeight() * 0.9f);
+        return Math.max(tilesOnly, getWidth() + fullHeight * 0.9f);
     }
 
     // ---- touch ------------------------------------------------------------

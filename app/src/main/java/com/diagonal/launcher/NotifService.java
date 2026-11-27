@@ -29,15 +29,14 @@ public class NotifService extends NotificationListenerService {
     @Override public void onListenerDisconnected() { instance = null; changed(); }
 
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
-        if (!worthShowing(sbn)) return;
         StatusBarNotification prev = lastPosted;
-        if (prev != null && prev.getKey().equals(sbn.getKey())
-                && (sbn.getNotification().flags & android.app.Notification.FLAG_ONLY_ALERT_ONCE) != 0) {
-            return; // silent update of the same notification
+        boolean silent = prev != null && prev.getKey().equals(sbn.getKey())
+                && (sbn.getNotification().flags & android.app.Notification.FLAG_ONLY_ALERT_ONCE) != 0;
+        if (!silent && worthShowing(sbn)) {   // only real new ones flash on the centre stripe
+            lastPosted = sbn;
+            lastPostedAt = System.currentTimeMillis();
         }
-        lastPosted = sbn;
-        lastPostedAt = System.currentTimeMillis();
-        changed();
+        changed();                            // the list always updates (e.g. after an inline reply)
     }
 
     private boolean worthShowing(StatusBarNotification sbn) {
