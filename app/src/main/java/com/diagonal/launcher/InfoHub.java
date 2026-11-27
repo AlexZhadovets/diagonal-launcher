@@ -126,6 +126,100 @@ final class InfoHub {
         return s != null && s.contains(listenerCn.flattenToString());
     }
 
+    // ---- air-raid alert for the user's region (Ukraine only) -----------------
+
+    static final String[] UA_REGIONS = {"м. Київ", "Київська область", "Вінницька область", "Волинська область",
+            "Дніпропетровська область", "Донецька область", "Житомирська область", "Закарпатська область",
+            "Запорізька область", "Івано-Франківська область", "Кіровоградська область", "Луганська область",
+            "Львівська область", "Миколаївська область", "Одеська область", "Полтавська область",
+            "Рівненська область", "Сумська область", "Тернопільська область", "Харківська область",
+            "Херсонська область", "Хмельницька область", "Черкаська область", "Чернівецька область",
+            "Чернігівська область", "Автономна Республіка Крим"};
+
+    /** null = no alert, otherwise "red" or "yellow". */
+    volatile String alertLevel;
+    private volatile long alertAt;
+    private volatile String detectedRegion;
+
+    /** Shown for Ukrainian language or a Ukrainian SIM/network. */
+    boolean alertsEnabled() {
+        android.content.SharedPreferences p = ctx.getSharedPreferences("diagonal", Context.MODE_PRIVATE);
+        if (!p.getBoolean("alerts_on", true)) return false;
+        if ("uk".equals(Locale.getDefault().getLanguage()) || "UA".equals(Locale.getDefault().getCountry())) return true;
+        try {
+            android.telephony.TelephonyManager tm = ctx.getSystemService(android.telephony.TelephonyManager.class);
+            return tm != null && ("ua".equalsIgnoreCase(tm.getNetworkCountryIso()) || "ua".equalsIgnoreCase(tm.getSimCountryIso()));
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    String region() {
+        String chosen = ctx.getSharedPreferences("diagonal", Context.MODE_PRIVATE).getString("alert_region", "");
+        if (!chosen.isEmpty()) return chosen;
+        return detectedRegion;
+    }
+
+    void resetAlerts() { alertAt = 0; }
+
+    /** "Київська область" → "київська", "м. Київ" / "Київ" → "київ". */
+    private static String key(String name) {
+        if (name == null) return "";
+        String s = name.toLowerCase(new Locale("uk")).replace("м.", "").replace("місто", "").trim();
+        int sp = s.indexOf(' ');
+        return sp > 0 ? s.substring(0, sp) : s;
+    }
+
+    private void fetchAlerts() {
+        if (net.isShutdown()) return;
+        alertAt = System.currentTimeMillis();
+        double[] ll = location();
+        net.execute(() -> {
+            if (region() == null) {
+                try {
+                    List<android.location.Address> a = new android.location.Geocoder(ctx, new Locale("uk"))
+                            .getFromLocation(ll[0], ll[1], 1);
+                    if (a != null && !a.isEmpty() && a.get(0).getAdminArea() != null) detectedRegion = a.get(0).getAdminArea();
+                } catch (Exception ignored) { }
+                if (detectedRegion == null) detectedRegion = "м. Київ";
+            }
+            String level = null;
+            HttpURLConnection con = null;
+            try {
+                // public report, no token; "Alert level: yellow" = drones, otherwise red (missiles)
+                con = (HttpURLConnection) new URL("https://api.alerts.in.ua/v3/alerts/active.md").openConnection();
+                con.setConnectTimeout(8000);
+                con.setReadTimeout(8000);
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(con.getInputStream(), "UTF-8"))) {
+                    String line;
+                    while ((line = r.readLine()) != null) sb.append(line).append('\n');
+                }
+                String want = key(region());
+                java.util.regex.Pattern head = java.util.regex.Pattern.compile("\\*\\*[^*(]*\\(([^)]+)\\)\\*\\*");
+                for (String para : sb.toString().split("\n\\s*\n")) {
+                    if (!para.contains("in effect since")) continue;      // active alerts only
+                    java.util.regex.Matcher m = head.matcher(para);
+                    if (!m.find() || !key(m.group(1)).equals(want)) continue;
+                    if (!para.contains("air raid")) continue;
+                    level = para.contains("Alert level: yellow") ? "yellow" : "red";
+                    break;
+                }
+            } catch (Exception e) {
+                alertAt = 0;   // retry soon
+                return;
+            } finally {
+                if (con != null) con.disconnect();
+            }
+            final String lv = level;
+            main.post(() -> {
+                boolean changed = lv == null ? alertLevel != null : !lv.equals(alertLevel);
+                alertLevel = lv;
+                if (changed && listener != null) listener.onInfoChanged();
+            });
+        });
+    }
+
     void destroy() { main.removeCallbacks(expire); net.shutdownNow(); }
 
     void resetWeather() { weatherAt = 0; }
@@ -136,6 +230,8 @@ final class InfoHub {
         readMedia();
         readNotification();
         if (System.currentTimeMillis() - weatherAt > WEATHER_EVERY_MS) fetchWeather();
+        if (alertsEnabled() && System.currentTimeMillis() - alertAt > 120_000L) fetchAlerts();
+        if (!alertsEnabled()) alertLevel = null;
         if (listener != null) listener.onInfoChanged();
     }
 

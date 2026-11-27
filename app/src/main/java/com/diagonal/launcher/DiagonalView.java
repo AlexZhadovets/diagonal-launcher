@@ -37,7 +37,7 @@ public class DiagonalView extends View {
         void onLongPress(AppEntry app);
         void onInfoClick();
         void onInfoLongPress();
-        /** 0 previous, 1 play/pause, 2 next, 3 back to the player (from the paused mini cover). */
+        /** 0 previous, 1 play/pause, 2 next, 3 back to the player (from the paused mini cover), 4 alert dot. */
         void onMusicControl(int which);
         /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
         void onCornerSwipe(int direction);
@@ -347,6 +347,18 @@ public class DiagonalView extends View {
     private final Path ctlPath = new Path();
     // music position: base + time since update × speed
     private long mPos, mUpd, mDur;
+    // corner of the tablet: air-raid alert (0 none, 1 yellow, 2 red) + battery
+    private int alert, battery = -1;
+    private boolean charging;
+    private final Paint statusPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    public void setStatus(int alertLevel, int batteryPct, boolean isCharging) {
+        if (alertLevel == alert && batteryPct == battery && isCharging == charging) return;
+        alert = alertLevel;
+        battery = batteryPct;
+        charging = isCharging;
+        invalidate();
+    }
     private float mSpeed;
 
     /** Content of the centre stripe. A change fades smoothly from the old look to the new one. */
@@ -424,6 +436,7 @@ public class DiagonalView extends View {
         } else {
             drawInfoContent(canvas, infoNow, s, tMin, tMax, 1f);
         }
+        drawStatus(canvas, s, tMin, tMax);
         canvas.restore();
         if (infoNow.music) postInvalidateDelayed(infoNow.playing ? 500 : 15000);   // progress bar + clock
     }
@@ -546,6 +559,45 @@ public class DiagonalView extends View {
         return clockText;
     }
 
+    /** Top-left corner of the tablet: alert dot (red / yellow) and battery %. */
+    private void drawStatus(Canvas canvas, float s, float tMin, float tMax) {
+        if (alert == 0 && battery < 0) return;
+        float len = tMax - tMin, mid = (tMin + tMax) / 2f;
+        float x = s - len / 2f + 10 * dp;
+        float cy = mid - band / 2f + 22 * dp;
+        int ink = infoNow.text;
+        if (alert != 0) {
+            float r = 10 * dp;
+            statusPaint.setStyle(Paint.Style.FILL);
+            statusPaint.setColor(alert == 2 ? 0xFFE53935 : 0xFFFFC107);
+            canvas.drawCircle(x + r, cy, r, statusPaint);
+            // siren: a little dome with a base
+            statusPaint.setColor(alert == 2 ? 0xFFFFFFFF : 0xFF2B2100);
+            tmpRect.set(x + r - r * 0.45f, cy - r * 0.5f, x + r + r * 0.45f, cy + r * 0.4f);
+            canvas.drawArc(tmpRect, 180, 180, true, statusPaint);
+            canvas.drawRect(x + r - r * 0.6f, cy + r * 0.0f, x + r + r * 0.6f, cy + r * 0.45f, statusPaint);
+            x += 2 * r + 8 * dp;
+        }
+        if (battery >= 0) {
+            float bw = 18 * dp, bh = 10 * dp;
+            statusPaint.setStyle(Paint.Style.STROKE);
+            statusPaint.setStrokeWidth(1.5f * dp);
+            statusPaint.setColor(ink);
+            tmpRect.set(x, cy - bh / 2, x + bw, cy + bh / 2);
+            canvas.drawRoundRect(tmpRect, 2.5f * dp, 2.5f * dp, statusPaint);
+            statusPaint.setStyle(Paint.Style.FILL);
+            canvas.drawRect(x + bw, cy - bh * 0.22f, x + bw + 2 * dp, cy + bh * 0.22f, statusPaint);
+            statusPaint.setColor(battery <= 15 && !charging ? 0xFFE53935 : ink);
+            tmpRect.set(x + 2 * dp, cy - bh / 2 + 2 * dp, x + 2 * dp + (bw - 4 * dp) * battery / 100f, cy + bh / 2 - 2 * dp);
+            canvas.drawRect(tmpRect, statusPaint);
+            timePaint.setColor(ink);
+            timePaint.setAlpha(230);
+            timePaint.setTextSize(13 * dp);
+            timePaint.setTypeface(infoTitlePaint.getTypeface());
+            canvas.drawText(battery + "%" + (charging ? " ⚡" : ""), x + bw + 6 * dp, cy + 4.5f * dp, timePaint);
+        }
+    }
+
     private static String clock(long ms) {
         long sec = ms / 1000;
         return (sec / 60) + ":" + (sec % 60 < 10 ? "0" : "") + (sec % 60);
@@ -579,6 +631,14 @@ public class DiagonalView extends View {
 
     /** Which music control is under a touch on the centre stripe: 0 prev, 1 play/pause, 2 next, −1 none. */
     private int musicControlAt(int index, float x, float y) {
+        if (alert != 0) {   // the alert dot in the top-left corner
+            float s0 = slotS(index);
+            visibleT(s0);
+            float tMax0 = tRange[1] - capMargin;
+            float t0 = (y - x) * INV_SQRT2;
+            float across = sOf(x, y) - s0;   // negative = top side of the tablet
+            if (tMax0 - t0 >= 0 && tMax0 - t0 < 56 * dp && across < -band / 2f + 48 * dp) return 4;
+        }
         if (!infoNow.music) {
             if (infoNow.mini == null) return -1;
             float s0 = slotS(index);

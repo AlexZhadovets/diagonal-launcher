@@ -24,7 +24,7 @@
     <string name="set_lock_snapshot">Home screen on the lock screen (wallpaper)</string>
     <string name="set_notif_access">Notification access</string>
     <string name="notif_title">Music and notifications</string>
-    <string name="notif_message">To show the music that is playing and new messages, allow Diagonal notification access. Without it the centre stripe shows the clock and weather.</string>
+    <string name="notif_message">To show the music that is playing and new messages, allow Diagonal notification access. Without it the tablet shows the clock and weather.</string>
     <string name="menu_pin">Home place</string>
     <string name="menu_color">Colour</string>
     <string name="card_player">Player</string>
@@ -93,4 +93,7 @@
     <string name="quiet_title">No pop-ups on the home screen</string>
     <string name="quiet_message">While Diagonal is on screen, other apps\' pop-up banners are replaced by Diagonal\'s own. Calls, alarms, important conversations and system alerts still pop up. This uses a temporary Do Not Disturb mode, so those notifications arrive silently while you are on the home screen; it switches off as soon as you leave.</string>
     <string name="set_quiet">Hide pop-ups on the home screen</string>
+    <string name="alert_region">Alert region</string>
+    <string name="alert_auto">Auto (from location)</string>
+    <string name="alert_off">Off</string>
 </resources>

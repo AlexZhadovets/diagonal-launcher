@@ -3,7 +3,7 @@
 An Android home screen (launcher) where every app is a big coloured diagonal stripe.
 
 - **Stripes.** About five stripes fit on the screen. Each one takes its colour from the app icon. Simple two-colour icons (DeepSeek, YouTube…) become a white glyph on the brand colour, and you can pick another colour for them.
-- **Opens in the middle.** You start on your 4 home apps with a smart stripe in the centre: a clock with weather and date, the music that is playing, and new notifications as a small line for a few seconds.
+- **Opens in the middle.** You start on your 4 home apps with the **tablet** in the centre: a clock with weather and date, a full music player while something plays (controls, progress, time), and new notifications as a short line in the app's colour. Its corner shows the battery level and, in Ukraine, an air-raid alert dot for your region (red = missiles / mass strike, yellow = drones; data: [alerts.in.ua](https://alerts.in.ua)). Long-press the tablet to choose the 4 home apps.
 - **Swipe across the stripes:**
   - **Up:** apps from A to Z (your home apps are listed here too).
   - **Down:** apps by time used.
@@ -40,9 +40,10 @@ Everything is optional. Diagonal still works without any of them; you only lose 
 | Do Not Disturb access | when you tap that tile | switching DND on/off |
 | Modify system settings | when you tap Auto-rotate | switching auto-rotate |
 | Set wallpaper | only if you switch on “Home screen on the lock screen” | putting a picture of your stripes on the lock screen |
-| Internet | always | weather from [Open-Meteo](https://open-meteo.com) (no account, no key) |
+| Do Not Disturb access | first start (Android 10+) | Diagonal's own home-screen rule that hides other apps' pop-ups while you are on the home screen and shows Diagonal's banner instead (calls, alarms, important conversations still pop up) |
+| Internet | always | weather from [Open-Meteo](https://open-meteo.com) and, in Ukraine, air-raid alerts from [alerts.in.ua](https://alerts.in.ua) (no account, no key) |
 
-Diagonal has no analytics and no servers. The only network request is the weather.
+Diagonal has no analytics and no servers. The only network requests are the weather and (in Ukraine) the public air-raid alert report. The alert dot is a convenience, not a replacement for the official “Повітряна тривога” app or sirens.
 
 ## Known problems and fixes
 

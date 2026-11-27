@@ -57,7 +57,7 @@ public class NotifList extends ScrollView {
         String key, pkg, title, text, big;
         long when;
         PendingIntent intent;
-        boolean autoCancel;
+        boolean autoCancel, ongoing;
         Bitmap large;
         final List<Action> actions = new ArrayList<>();
     }
@@ -245,7 +245,10 @@ public class NotifList extends ScrollView {
             stack.addView(more);
         }
 
+        boolean allOngoing = true;
+        for (Item g : group) if (!g.ongoing) { allOngoing = false; break; }
         Swipe swipe = new Swipe(getContext(), () -> host.dismiss(group));
+        swipe.locked = allOngoing;    // like the shade: ongoing ones stay
         swipe.addView(stack);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -465,9 +468,47 @@ public class NotifList extends ScrollView {
         it.when = n.when != 0 ? n.when : sbn.getPostTime();
         it.intent = n.contentIntent;
         it.autoCancel = (n.flags & Notification.FLAG_AUTO_CANCEL) != 0;
+        it.ongoing = sbn.isOngoing() || !sbn.isClearable();
         CharSequence t = ex == null ? null : ex.getCharSequence(Notification.EXTRA_TITLE);
+        if ((t == null || t.length() == 0) && ex != null) t = ex.getCharSequence(Notification.EXTRA_TITLE_BIG);
+        if ((t == null || t.length() == 0) && ex != null) t = ex.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE);
         CharSequence x = ex == null ? null : ex.getCharSequence(Notification.EXTRA_TEXT);
         CharSequence big = ex == null ? null : ex.getCharSequence(Notification.EXTRA_BIG_TEXT);
+        if (ex != null) {
+            // chat apps (MessagingStyle): the messages are in EXTRA_MESSAGES
+            android.os.Parcelable[] msgs = ex.getParcelableArray(Notification.EXTRA_MESSAGES);
+            if (msgs != null && msgs.length > 0) {
+                StringBuilder all = new StringBuilder();
+                for (android.os.Parcelable p : msgs) {
+                    if (!(p instanceof Bundle)) continue;
+                    CharSequence mt = ((Bundle) p).getCharSequence("text");
+                    CharSequence who = ((Bundle) p).getCharSequence("sender");
+                    if (mt == null) continue;
+                    if (all.length() > 0) all.append('\n');
+                    if (who != null) all.append(who).append(": ");
+                    all.append(mt);
+                    if (x == null || x.length() == 0 || p == msgs[msgs.length - 1]) x = mt;
+                }
+                if (all.length() > 0 && big == null) big = all.toString();
+            }
+            // inbox style: several lines
+            CharSequence[] lines = ex.getCharSequenceArray(Notification.EXTRA_TEXT_LINES);
+            if (lines != null && lines.length > 0) {
+                StringBuilder sb = new StringBuilder();
+                for (CharSequence l : lines) { if (sb.length() > 0) sb.append('\n'); sb.append(l); }
+                if (big == null) big = sb.toString();
+                if (x == null || x.length() == 0) x = lines[lines.length - 1];
+            }
+            if ((x == null || x.length() == 0)) x = ex.getCharSequence(Notification.EXTRA_SUB_TEXT);
+            // progress (downloads, uploads…)
+            int max = ex.getInt(Notification.EXTRA_PROGRESS_MAX, 0);
+            if (max > 0) {
+                int pr = ex.getInt(Notification.EXTRA_PROGRESS, 0);
+                String pc = Math.round(pr * 100f / max) + "%";
+                x = x == null || x.length() == 0 ? pc : x + "  ·  " + pc;
+            }
+        }
+        if ((t == null || t.length() == 0) && n.tickerText != null) t = n.tickerText;
         it.title = t == null ? "" : t.toString();
         it.text = x == null ? "" : x.toString();
         it.big = big == null ? null : big.toString();
@@ -505,6 +546,7 @@ public class NotifList extends ScrollView {
     private static final class Swipe extends FrameLayout {
         private final Runnable onDismiss;
         private final int slop;
+        boolean locked;
         private float downX, downY;
         private boolean dragging;
         private VelocityTracker vt;
@@ -529,7 +571,7 @@ public class NotifList extends ScrollView {
                 case MotionEvent.ACTION_MOVE:
                     float dx = e.getRawX() - downX, dy = e.getRawY() - downY;
                     if (vt != null) vt.addMovement(e);
-                    if (Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+                    if (!locked && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f) {
                         dragging = true;
                         getParent().requestDisallowInterceptTouchEvent(true);
                         return true;
@@ -553,7 +595,7 @@ public class NotifList extends ScrollView {
             float dx = e.getRawX() - downX;
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_MOVE:
-                    if (!dragging && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(e.getRawY() - downY) * 1.5f) {
+                    if (!dragging && !locked && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(e.getRawY() - downY) * 1.5f) {
                         dragging = true;
                         getParent().requestDisallowInterceptTouchEvent(true);
                     }

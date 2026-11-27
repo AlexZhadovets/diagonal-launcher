@@ -336,6 +336,18 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
             diagonal.setInfo(info.time(), sub, null, 0xFF16161C, 0xFFFFFFFF);
         }
+        int alert = "red".equals(info.alertLevel) ? 2 : "yellow".equals(info.alertLevel) ? 1 : 0;
+        Intent bat = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        int pct = -1;
+        boolean chg = false;
+        if (bat != null) {
+            int level = bat.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = bat.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100);
+            if (level >= 0 && scale > 0) pct = Math.round(level * 100f / scale);
+            int st = bat.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            chg = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL;
+        }
+        diagonal.setStatus(alert, pct, chg);
         panels.updateCards();
         if (panels.quick.level() == 2) panels.refreshNotifications();
         maybeShowBanner();
@@ -357,6 +369,12 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     @Override
     public void onMusicControl(int which) {
         if (which == 3) { forcePlayer = true; updateInfoStripe(); return; }
+        if (which == 4) {   // alert dot: the official alert app, else the live map
+            Intent app = getPackageManager().getLaunchIntentForPackage("com.ukrainealarm");
+            startFirst(app != null ? app : new Intent(Intent.ACTION_VIEW, Uri.parse("https://alerts.in.ua")),
+                    new Intent(Intent.ACTION_VIEW, Uri.parse("https://alerts.in.ua")));
+            return;
+        }
         if (which == 0) info.previous();
         else if (which == 2) info.next();
         else info.playPause();
@@ -402,7 +420,28 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                     }
                 })
                 .setNeutralButton(R.string.set_notif_access, (d, w) -> openNotificationAccess())
+                .setNegativeButton(R.string.alert_region, (d, w) -> chooseAlertRegion())
                 .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    /** Region for the air-raid alert dot: auto (from location) or a chosen oblast; or switch it off. */
+    private void chooseAlertRegion() {
+        String[] regions = InfoHub.UA_REGIONS;
+        String[] items = new String[regions.length + 2];
+        items[0] = getString(R.string.alert_auto);
+        items[1] = getString(R.string.alert_off);
+        System.arraycopy(regions, 0, items, 2, regions.length);
+        shownDialog = dialog().setTitle(R.string.alert_region)
+                .setItems(items, (d, w) -> {
+                    SharedPreferences.Editor e = prefs.edit();
+                    if (w == 0) e.putString("alert_region", "").putBoolean("alerts_on", true);
+                    else if (w == 1) e.putBoolean("alerts_on", false);
+                    else e.putString("alert_region", regions[w - 2]).putBoolean("alerts_on", true);
+                    e.apply();
+                    info.resetAlerts();
+                    info.refresh();
+                })
                 .show();
     }
 

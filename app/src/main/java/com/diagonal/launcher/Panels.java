@@ -301,16 +301,26 @@ final class Panels {
         }
         StringBuilder sig = new StringBuilder();
         if (all != null) {
+            // Everything the shade shows: normal, silent and ongoing ones (downloads, navigation…).
+            // Group summaries only when the group has no children of its own; music sits in the player.
+            java.util.Set<String> groupsWithChildren = new java.util.HashSet<>();
+            for (android.service.notification.StatusBarNotification sbn : all) {
+                android.app.Notification n = sbn.getNotification();
+                if (n != null && (n.flags & android.app.Notification.FLAG_GROUP_SUMMARY) == 0) groupsWithChildren.add(sbn.getGroupKey());
+            }
             List<android.service.notification.StatusBarNotification> list = new ArrayList<>();
             for (android.service.notification.StatusBarNotification sbn : all) {
                 android.app.Notification n = sbn.getNotification();
-                if (n == null || sbn.isOngoing() || !sbn.isClearable()) continue;
-                if ((n.flags & android.app.Notification.FLAG_GROUP_SUMMARY) != 0) continue;
+                if (n == null) continue;
+                if ((n.flags & android.app.Notification.FLAG_GROUP_SUMMARY) != 0 && groupsWithChildren.contains(sbn.getGroupKey())) continue;
                 if (sbn.getPackageName().equals(act.getPackageName())) continue;
                 if (android.app.Notification.CATEGORY_TRANSPORT.equals(n.category)) continue;
+                if (n.extras != null && n.extras.containsKey(android.app.Notification.EXTRA_MEDIA_SESSION)) continue;
                 list.add(sbn);
             }
-            list.sort((a, b) -> Long.compare(b.getPostTime(), a.getPostTime()));
+            // newest first; ongoing (can't be dismissed) after the rest, like the shade
+            list.sort((a, b) -> a.isOngoing() != b.isOngoing() ? (a.isOngoing() ? 1 : -1)
+                    : Long.compare(b.getPostTime(), a.getPostTime()));
             for (android.service.notification.StatusBarNotification sbn : list) {
                 sig.append(sbn.getKey()).append('@').append(sbn.getPostTime()).append(';');
             }

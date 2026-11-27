@@ -24,7 +24,7 @@
     <string name="set_lock_snapshot">Робочий стіл на екрані блокування (шпалери)</string>
     <string name="set_notif_access">Доступ до сповіщень</string>
     <string name="notif_title">Музика і сповіщення</string>
-    <string name="notif_message">Щоб показувати музику, що грає, і нові повідомлення, дозволь Diagonal доступ до сповіщень. Без цього центральна смуга показує годинник і погоду.</string>
+    <string name="notif_message">Щоб показувати музику, що грає, і нові повідомлення, дозволь Diagonal доступ до сповіщень. Без цього планшет показує годинник і погоду.</string>
     <string name="menu_pin">Місце на головному екрані</string>
     <string name="menu_color">Колір</string>
     <string name="card_player">Плеєр</string>
@@ -93,4 +93,7 @@
     <string name="quiet_title">Без спливаючих вікон на робочому столі</string>
     <string name="quiet_message">Поки Diagonal на екрані, спливаючі банери інших програм замінюються власними. Дзвінки, будильники, важливі розмови й системні сповіщення спливають як завжди. Для цього вмикається тимчасовий режим «Не турбувати», тож такі сповіщення на робочому столі приходять без звуку; щойно ти виходиш, він вимикається.</string>
     <string name="set_quiet">Ховати спливаючі вікна на робочому столі</string>
+    <string name="alert_region">Регіон тривог</string>
+    <string name="alert_auto">Авто (за місцезнаходженням)</string>
+    <string name="alert_off">Вимкнути</string>
 </resources>
