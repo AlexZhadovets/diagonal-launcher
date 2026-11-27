@@ -74,6 +74,7 @@ final class Panels {
 
     // own widgets
     private TextView musicTitle, musicArtist, musicPlay;
+    private SlantCard musicCard;
     private ImageView musicArt;
     private LinearLayout chatRow, claudeChips;
     private TextView chatHint;
@@ -98,6 +99,20 @@ final class Panels {
         quick = new QuickPanel(act);
         quick.setListener(new QuickPanel.Listener() {
             @Override public void onTile(QuickPanel.Tile t) { Panels.this.onTile(t); }
+            @Override public void onTilesReordered(List<QuickPanel.Tile> list) {
+                tiles.clear();
+                tiles.addAll(list);
+                List<String> ids = new ArrayList<>();
+                for (QuickPanel.Tile t : list) ids.add(String.valueOf(t.id));
+                prefs.edit().putString(KEY_TILE_ORDER, TextUtils.join(",", ids)).apply();
+            }
+            @Override public void onApp(AppEntry app) { closeAll(); act.launch(app); }
+            @Override public void onAppLongPress(int slot) {
+                act.pickApp(act.getString(R.string.quick_app_title), app -> {
+                    prefs.edit().putString(KEY_QUICK_APP + slot, app == null ? "" : app.key).apply();
+                    quick.setApps(act.quickApps());
+                });
+            }
             @Override public void onNotification(QuickPanel.Row r) { openRow(r); }
             @Override public void onClearNotifications() { clearNotifications(); }
         });
@@ -163,16 +178,26 @@ final class Panels {
     }
 
     /** +1 = swipe towards top-right (widgets), −1 = towards bottom-left (quick settings). */
+    static final String KEY_TILE_ORDER = "tile_order";
+    static final String KEY_SWAP_SWIPES = "swap_swipes";
+    static final String KEY_QUICK_ONE = "quick_one_swipe";
+    static final String KEY_WIDGETS_ONE = "widgets_one_swipe";
+    static final String KEY_QUICK_APP = "quick_app";
+
     void onCornerSwipe(int dir) {
+        if (prefs.getBoolean(KEY_SWAP_SWIPES, false)) dir = -dir;   // user swapped the two swipes
+        boolean quickOne = prefs.getBoolean(KEY_QUICK_ONE, false);
+        boolean widgetsOne = prefs.getBoolean(KEY_WIDGETS_ONE, false);
         if (dir < 0) {
-            if (widgets.level() > 0) { widgets.setLevel(widgets.level() - 1); return; }
+            if (widgets.level() > 0) { widgets.setLevel(widgetsOne ? 0 : widgets.level() - 1); return; }
             refreshTiles();
             refreshNotifications();
-            quick.setLevel(Math.min(2, quick.level() + 1));
+            quick.setApps(act.quickApps());
+            quick.setLevel(quickOne ? 2 : Math.min(2, quick.level() + 1));
         } else {
-            if (quick.level() > 0) { quick.setLevel(quick.level() - 1); return; }
+            if (quick.level() > 0) { quick.setLevel(quickOne ? 0 : quick.level() - 1); return; }
             if (widgets.level() == 0) { refreshShortcuts(); refreshCalendar(); }
-            widgets.setLevel(Math.min(2, widgets.level() + 1));
+            widgets.setLevel(widgetsOne ? 2 : Math.min(2, widgets.level() + 1));
         }
     }
 
@@ -264,7 +289,16 @@ final class Panels {
         int[] icons = {Icons.BLUETOOTH, Icons.INTERNET, Icons.WALLET, Icons.TORCH, Icons.WIFI, Icons.SOUND,
                 Icons.DND, Icons.ROTATE, Icons.NFC, Icons.HOTSPOT, Icons.LOCATION, Icons.ALARM,
                 Icons.AIRPLANE, Icons.CAMERA, Icons.SHADE, Icons.SETTINGS};
-        for (int i = 0; i < names.length; i++) tiles.add(new QuickPanel.Tile(i, icons[i], names[i]));
+        List<QuickPanel.Tile> all = new ArrayList<>();
+        for (int i = 0; i < names.length; i++) all.add(new QuickPanel.Tile(i, icons[i], names[i]));
+        // user order (long-press a tile, tap another to swap)
+        for (String s : prefs.getString(KEY_TILE_ORDER, "").split(",")) {
+            try {
+                int id = Integer.parseInt(s);
+                for (QuickPanel.Tile t : all) if (t.id == id && !tiles.contains(t)) tiles.add(t);
+            } catch (NumberFormatException ignored) { }
+        }
+        for (QuickPanel.Tile t : all) if (!tiles.contains(t)) tiles.add(t);
         quick.setTiles(tiles);
     }
 
@@ -445,15 +479,15 @@ final class Panels {
         int pad = Math.round(14 * dp);
 
         // Player
-        LinearLayout music = new LinearLayout(act);
+        musicCard = new SlantCard(act, 0xFF26262E);
+        SlantCard music = musicCard;
         music.setOrientation(LinearLayout.HORIZONTAL);
         music.setGravity(Gravity.CENTER_VERTICAL);
         music.setPadding(pad, pad, pad, pad);
-        music.setBackground(cardBg(0xFF26262E));
         musicArt = new ImageView(act);
         musicArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
         musicArt.setClipToOutline(true);
-        musicArt.setBackground(cardBg(0xFF33333C));
+        musicArt.setBackgroundColor(0x33000000);
         int art = Math.round(64 * dp);
         music.addView(musicArt, new LinearLayout.LayoutParams(art, art));
         LinearLayout texts = new LinearLayout(act);
@@ -483,10 +517,9 @@ final class Panels {
         register("player", music, 128);
 
         // Chats: recent conversations (shortcuts published by messengers)
-        LinearLayout chats = new LinearLayout(act);
+        SlantCard chats = new SlantCard(act, 0xFF1565C0);
         chats.setOrientation(LinearLayout.VERTICAL);
         chats.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
-        chats.setBackground(cardBg(0xFF1E2433));
         chats.setClickable(true);
         TextView chatsTitle = text(12, 0x99FFFFFF, true);
         chatsTitle.setText(act.getString(R.string.chats_title));
@@ -501,10 +534,9 @@ final class Panels {
         register("chats", chats, 124);
 
         // Claude: ask box + Claude's own shortcuts
-        LinearLayout claude = new LinearLayout(act);
+        SlantCard claude = new SlantCard(act, 0xFFD97757);
         claude.setOrientation(LinearLayout.VERTICAL);
         claude.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
-        claude.setBackground(cardBg(0xFFC96442));
         claude.setClickable(true);
         TextView claudeTitle = text(12, 0xCCFFFFFF, true);
         claudeTitle.setText("CLAUDE");
@@ -562,7 +594,11 @@ final class Panels {
             case "calendar": return act.getString(R.string.card_calendar);
             case "battery": return act.getString(R.string.card_battery);
             case "alarm": return act.getString(R.string.card_alarm);
-            default: return act.getString(R.string.card_notes);
+            case "notes": return act.getString(R.string.card_notes);
+            default: {
+                AppEntry a = id.startsWith("app:") ? act.appFor(id.substring(4)) : null;
+                return a != null ? a.label : id;
+            }
         }
     }
 
@@ -570,8 +606,18 @@ final class Panels {
     private List<String> cardOrder() {
         List<String> out = new ArrayList<>();
         String saved = prefs.getString(KEY_CARDS, "player,chats,claude");
-        for (String id : saved.split(",")) if (cardViews.containsKey(id) && !out.contains(id)) out.add(id);
+        for (String id : saved.split(",")) {
+            if (id.startsWith("app:") && !cardViews.containsKey(id) && !buildAppCard(id)) continue;
+            if (cardViews.containsKey(id) && !out.contains(id)) out.add(id);
+        }
         return out;
+    }
+
+    /** App widgets need the app list; build them once it has loaded. */
+    void onAppsLoaded() {
+        for (String id : prefs.getString(KEY_CARDS, "").split(",")) {
+            if (id.startsWith("app:") && !cardViews.containsKey(id)) { arrangeCards(); return; }
+        }
     }
 
     private void saveOrder(List<String> ids) { prefs.edit().putString(KEY_CARDS, TextUtils.join(",", ids)).apply(); }
@@ -587,17 +633,18 @@ final class Panels {
                     Math.round(cardHeights.get(id) * dp)));
         }
         if (addCard == null) {
-            TextView add = text(15, 0xCCFFFFFF, true);
-            add.setText(act.getString(R.string.card_add));
+            SlantCard add = new SlantCard(act, 0xFF24242C);
             add.setGravity(Gravity.CENTER);
-            add.setBackground(cardBg(0xFF1E1E25));
+            TextView t = text(15, 0xCCFFFFFF, true);
+            t.setText(act.getString(R.string.card_add));
+            add.addView(t);
+            add.setClickable(true);
             add.setOnClickListener(v -> addCardDialog());
             addCard = add;
         }
         refreshCalendar();
-        if (cardOrder().size() < ALL_CARDS.length) {
-            widgets.addView(addCard, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(52 * dp)));
-        }
+        refreshAppCards();
+        widgets.addView(addCard, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(52 * dp)));
         updateCards();
     }
 
@@ -620,10 +667,8 @@ final class Panels {
         }
         labels.add(act.getString(R.string.card_remove));
         actions.add(() -> { order.remove(id); saveOrder(order); arrangeCards(); });
-        if (order.size() < ALL_CARDS.length) {
-            labels.add(act.getString(R.string.card_add).replace("+", "").trim());
-            actions.add(this::addCardDialog);
-        }
+        labels.add(act.getString(R.string.card_add).replace("+", "").trim());
+        actions.add(this::addCardDialog);
         act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle(cardName(id))
                 .setItems(labels.toArray(new String[0]), (d, w) -> actions.get(w).run()));
@@ -633,11 +678,29 @@ final class Panels {
         List<String> order = cardOrder();
         List<String> missing = new ArrayList<>();
         for (String id : ALL_CARDS) if (!order.contains(id)) missing.add(id);
-        String[] names = new String[missing.size()];
-        for (int k = 0; k < names.length; k++) names[k] = cardName(missing.get(k));
+        for (String pkg : POPULAR) {
+            String id = "app:" + pkg;
+            if (!order.contains(id) && act.appFor(pkg) != null) missing.add(id);
+        }
+        List<String> names = new ArrayList<>();
+        for (String id : missing) names.add(cardName(id));
+        names.add(act.getString(R.string.card_other_app));
         act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle(act.getString(R.string.card_add))
-                .setItems(names, (d, w) -> { order.add(0, missing.get(w)); saveOrder(order); arrangeCards(); }));
+                .setItems(names.toArray(new String[0]), (d, w) -> {
+                    if (w < missing.size()) { addCardId(missing.get(w)); return; }
+                    act.pickApp(act.getString(R.string.card_other_app), app -> {
+                        if (app != null) addCardId("app:" + app.component.getPackageName());
+                    });
+                }));
+    }
+
+    private void addCardId(String id) {
+        List<String> order = cardOrder();
+        if (order.contains(id)) return;
+        order.add(0, id);     // new widget goes into the corner, where it is seen first
+        saveOrder(order);
+        arrangeCards();
     }
 
     // ---- extra cards ------------------------------------------------------
@@ -648,10 +711,9 @@ final class Panels {
 
     private LinearLayout simpleCard(int color, String caption) {
         int pad = Math.round(14 * dp);
-        LinearLayout c = new LinearLayout(act);
+        SlantCard c = new SlantCard(act, color);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
-        c.setBackground(cardBg(color));
         c.setClickable(true);
         TextView t = text(12, 0x99FFFFFF, true);
         t.setText(caption.toUpperCase(Locale.getDefault()));
@@ -661,14 +723,14 @@ final class Panels {
     }
 
     private void buildExtraCards() {
-        LinearLayout weather = simpleCard(0xFF1B2A4A, act.getString(R.string.card_weather));
+        LinearLayout weather = simpleCard(0xFF0B5CAD, act.getString(R.string.card_weather));
         weatherBig = text(34, 0xFFFFFFFF, true);
         weatherSmall = text(14, 0xCCFFFFFF, false);
         weather.addView(weatherBig);
         weather.addView(weatherSmall);
         register("weather", weather, 116);
 
-        LinearLayout cal = simpleCard(0xFF2B1E3A, act.getString(R.string.card_calendar));
+        LinearLayout cal = simpleCard(0xFF6A3FB5, act.getString(R.string.card_calendar));
         calendarList = new LinearLayout(act);
         calendarList.setOrientation(LinearLayout.VERTICAL);
         cal.addView(calendarList);
@@ -685,7 +747,7 @@ final class Panels {
         });
         register("calendar", cal, 150);
 
-        LinearLayout bat = simpleCard(0xFF1D2E22, act.getString(R.string.card_battery));
+        LinearLayout bat = simpleCard(0xFF2E7D32, act.getString(R.string.card_battery));
         batteryBig = text(30, 0xFFFFFFFF, true);
         batterySmall = text(13, 0xCCFFFFFF, false);
         bat.addView(batteryBig);
@@ -703,13 +765,13 @@ final class Panels {
         bat.setOnClickListener(v -> act.startFirst(new Intent(Intent.ACTION_POWER_USAGE_SUMMARY)));
         register("battery", bat, 112);
 
-        LinearLayout alarm = simpleCard(0xFF33281A, act.getString(R.string.card_alarm));
+        LinearLayout alarm = simpleCard(0xFFE65100, act.getString(R.string.card_alarm));
         alarmBig = text(30, 0xFFFFFFFF, true);
         alarm.addView(alarmBig);
         alarm.setOnClickListener(v -> act.startFirst(new Intent(AlarmClock.ACTION_SHOW_ALARMS)));
         register("alarm", alarm, 96);
 
-        LinearLayout notes = simpleCard(0xFF3A3520, act.getString(R.string.card_notes));
+        LinearLayout notes = simpleCard(0xFF6D4C41, act.getString(R.string.card_notes));
         notesText = text(15, 0xFFFFFFFF, false);
         notesText.setSingleLine(false);
         notesText.setMaxLines(3);
@@ -831,6 +893,129 @@ final class Panels {
         }
     }
 
+    // ---- app widgets (Instagram, Viber, WhatsApp, Discord, …) -------------
+
+    /** Popular apps offered first in "Add widget" when installed. */
+    private static final String[] POPULAR = {"com.instagram.android", "com.viber.voip", "com.whatsapp",
+            "com.discord", "org.telegram.messenger", "com.spotify.music", "com.google.android.youtube",
+            "com.zhiliaoapp.musically", "com.google.android.apps.maps", "com.google.android.gm",
+            "com.android.chrome", "com.ftband.mono", "ua.gov.diia.app", "com.google.android.apps.photos"};
+
+    private final java.util.Map<String, LinearLayout> appChipRows = new java.util.HashMap<>();
+
+    /** Builds the card for "app:<package>"; false when that app isn't installed. */
+    private boolean buildAppCard(String id) {
+        String pkg = id.substring(4);
+        AppEntry app = act.appFor(pkg);
+        if (app == null) return false;
+        int pad = Math.round(14 * dp);
+        SlantCard card = new SlantCard(act, app.color);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
+        card.setClickable(true);
+        card.setOnClickListener(v -> { closeAll(); act.launch(app); });
+
+        LinearLayout head = new LinearLayout(act);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        AppTileView tile = new AppTileView(act, app);
+        int th = Math.round(30 * dp);
+        head.addView(tile, new LinearLayout.LayoutParams(Math.round(th * 1.5f), th));
+        TextView name = text(17, app.textColor, true);
+        name.setText(app.label);
+        name.setPadding(Math.round(10 * dp), 0, 0, 0);
+        head.addView(name);
+        card.addView(head);
+
+        LinearLayout chips = new LinearLayout(act);
+        chips.setPadding(0, Math.round(10 * dp), 0, 0);
+        card.addView(chips);
+        appChipRows.put(pkg, chips);
+        register(id, card, 118);
+        return true;
+    }
+
+    /** Fills every app card with that app's own quick actions / recent chats (worker thread). */
+    private void refreshAppCards() {
+        if (appChipRows.isEmpty() || destroyed || shortcutWorker.isShutdown()) return;
+        final android.content.pm.LauncherApps la = act.getSystemService(android.content.pm.LauncherApps.class);
+        final int density = act.getResources().getDisplayMetrics().densityDpi;
+        final int iconPx = Math.round(26 * dp);
+        final List<String> pkgs = new ArrayList<>(appChipRows.keySet());
+        shortcutWorker.execute(() -> {
+            java.util.Map<String, List<Sc>> result = new java.util.HashMap<>();
+            boolean allowed;
+            try { allowed = la.hasShortcutHostPermission(); } catch (RuntimeException e) { allowed = false; }
+            for (String pkg : pkgs) {
+                List<Sc> list = new ArrayList<>();
+                if (allowed) {
+                    try {
+                        android.content.pm.LauncherApps.ShortcutQuery q = new android.content.pm.LauncherApps.ShortcutQuery();
+                        q.setPackage(pkg);
+                        q.setQueryFlags(android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC
+                                | android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST
+                                | android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED);
+                        List<android.content.pm.ShortcutInfo> got = la.getShortcuts(q, Process.myUserHandle());
+                        if (got != null) {
+                            List<android.content.pm.ShortcutInfo> s = new ArrayList<>(got);
+                            s.sort((a, b) -> a.isDeclaredInManifest() == b.isDeclaredInManifest()
+                                    ? Integer.compare(a.getRank(), b.getRank())
+                                    : (a.isDeclaredInManifest() ? -1 : 1));
+                            for (android.content.pm.ShortcutInfo si : s) {
+                                if (!si.isEnabled() || list.size() >= 4) continue;
+                                list.add(load(la, si, density, iconPx));
+                            }
+                        }
+                    } catch (RuntimeException ignored) { }
+                }
+                result.put(pkg, list);
+            }
+            act.runOnUiThread(() -> {
+                if (destroyed || act.isDestroyed()) return;
+                for (java.util.Map.Entry<String, List<Sc>> e : result.entrySet()) fillAppChips(e.getKey(), e.getValue());
+            });
+        });
+    }
+
+    private void fillAppChips(String pkg, List<Sc> list) {
+        LinearLayout row = appChipRows.get(pkg);
+        AppEntry app = act.appFor(pkg);
+        if (row == null || app == null) return;
+        row.removeAllViews();
+        if (list.isEmpty()) {
+            TextView t = text(13, app.textColor, false);
+            t.setAlpha(0.7f);
+            t.setText(act.getString(R.string.app_card_open));
+            row.addView(t);
+            return;
+        }
+        for (Sc s : list) {
+            LinearLayout chip = new LinearLayout(act);
+            chip.setGravity(Gravity.CENTER_VERTICAL);
+            int hp = Math.round(10 * dp);
+            chip.setPadding(hp, 0, hp, 0);
+            GradientDrawable cb = new GradientDrawable();
+            cb.setCornerRadius(16 * dp);
+            cb.setColor(ColorExtractor.textColorFor(app.color) == 0xFFFFFFFF ? 0x33000000 : 0x22FFFFFF);
+            chip.setBackground(cb);
+            if (s.icon != null) {
+                ImageView iv = new ImageView(act);
+                iv.setImageBitmap(s.icon);
+                int is = Math.round(22 * dp);
+                chip.addView(iv, new LinearLayout.LayoutParams(is, is));
+            }
+            TextView t = text(13, app.textColor, true);
+            t.setText(s.label);
+            t.setMaxWidth(Math.round(110 * dp));
+            t.setPadding(Math.round(6 * dp), 0, 0, 0);
+            chip.addView(t);
+            chip.setOnClickListener(v -> startShortcut(s.info));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Math.round(36 * dp));
+            lp.rightMargin = Math.round(6 * dp);
+            row.addView(chip, lp);
+        }
+    }
+
     private TextView control(String label, View.OnClickListener l) {
         TextView t = text(22, 0xFFFFFFFF, true);
         t.setText(label);
@@ -861,6 +1046,7 @@ final class Panels {
             musicArt.setImageBitmap(m.art);
             musicPlay.setText(m.playing ? "⏸" : "▶");
         }
+        if (musicCard != null) musicCard.setColor(m != null && m.art != null ? act.artColor() : 0xFF26262E);
     }
 
     // ---- Claude ---------------------------------------------------------
@@ -970,7 +1156,7 @@ final class Panels {
         String pkg = si.getPackage().toLowerCase(Locale.ROOT);
         boolean messenger = pkg.contains("telegram") || pkg.contains("ayugram") || pkg.contains("nova")
                 || pkg.contains("whatsapp") || pkg.contains("viber") || pkg.contains("signal")
-                || pkg.contains("orca") || pkg.contains("instagram") || pkg.contains("discord")
+                || pkg.contains("orca") || pkg.contains("discord")
                 || pkg.contains("messag") || pkg.contains("chat");
         if (messenger && (si.isDynamic() || si.isPinned())) return true;
         java.util.Set<String> cats = si.getCategories();

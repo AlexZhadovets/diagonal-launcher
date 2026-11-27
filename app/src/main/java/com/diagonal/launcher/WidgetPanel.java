@@ -57,9 +57,12 @@ public class WidgetPanel extends FrameLayout {
         return Math.min(want, w + first);
     }
 
+    /** Full window: still a triangle (top-right corner stays open), cards above get a slanted edge. */
+    private float level2Legs(int w, int h) { return w + h * 0.78f; }
+
     private float targetLegs(int lvl) {
         if (lvl == 0) return 0f;
-        return lvl == 1 ? level1Legs(getWidth()) : getWidth() + getHeight() + 50 * dp;
+        return lvl == 1 ? level1Legs(getWidth()) : level2Legs(getWidth(), getHeight());
     }
 
     public void setLevel(int newLevel) {
@@ -95,7 +98,7 @@ public class WidgetPanel extends FrameLayout {
     protected void onMeasure(int wSpec, int hSpec) {
         int w = MeasureSpec.getSize(wSpec), h = MeasureSpec.getSize(hSpec);
         setMeasuredDimension(w, h);
-        float limit = level == 2 ? w + h + 50 * dp : level1Legs(w);
+        float limit = level == 2 ? level2Legs(w, h) : level1Legs(w);
         int pad = Math.round(12 * dp);
         int minW = Math.round(150 * dp);
         int b = insetBottom + pad;              // distance of the next card's bottom from the screen bottom
@@ -110,8 +113,11 @@ public class WidgetPanel extends FrameLayout {
                 continue;
             }
             int top = b + ch;
-            int cw = Math.round(Math.min(w - 2 * pad, limit - top - 2 * pad));
-            if (cw < minW || h - top < insetTop) {
+            // width at the card's bottom edge; the triangle edge cuts its top-right corner at 45°
+            int cw = Math.round(Math.min(w - 2 * pad, limit - b - 2 * pad));
+            int topWidth = Math.round(limit - top - 2 * pad);
+            int cut = Math.max(0, Math.min(ch, cw - topWidth));
+            if (cw - cut < minW || h - top < insetTop) {
                 stop = true;
                 c.setTag(R.id.hidden_card, Boolean.TRUE);
                 c.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.EXACTLY),
@@ -119,6 +125,7 @@ public class WidgetPanel extends FrameLayout {
                 continue;
             }
             c.setTag(R.id.hidden_card, null);
+            if (c instanceof SlantCard) ((SlantCard) c).setCut(cut);
             c.measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY),
                     MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY));
             b = top + pad;

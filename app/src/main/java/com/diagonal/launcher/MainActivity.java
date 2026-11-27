@@ -297,6 +297,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         if (panels.quick.level() == 2) panels.refreshNotifications();
     }
 
+    int artColor() { return lastArtColor; }
+
     AppEntry appFor(String pkg) {
         for (AppEntry a : allApps) if (a.component.getPackageName().equals(pkg)) return a;
         return null;
@@ -312,14 +314,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     /** Launcher settings (the "Diagonal" tile in the big quick panel). */
     void showLauncherSettings() {
-        String[] items = {getString(R.string.set_hide_status), getString(R.string.set_lock_snapshot)};
-        boolean[] checked = {prefs.getBoolean(KEY_HIDE_STATUS, true), prefs.getBoolean(KEY_LOCK_SNAPSHOT, false)};
+        String[] items = {getString(R.string.set_hide_status), getString(R.string.set_lock_snapshot),
+                getString(R.string.set_quick_one), getString(R.string.set_widgets_one), getString(R.string.set_swap_swipes)};
+        boolean[] checked = {prefs.getBoolean(KEY_HIDE_STATUS, true), prefs.getBoolean(KEY_LOCK_SNAPSHOT, false),
+                prefs.getBoolean(Panels.KEY_QUICK_ONE, false), prefs.getBoolean(Panels.KEY_WIDGETS_ONE, false),
+                prefs.getBoolean(Panels.KEY_SWAP_SWIPES, false)};
         shownDialog = dialog().setTitle(R.string.app_name)
                 .setMultiChoiceItems(items, checked, (d, which, on) -> {
                     if (which == 0) { prefs.edit().putBoolean(KEY_HIDE_STATUS, on).apply(); applySystemBars(); }
-                    else {
+                    else if (which == 1) {
                         prefs.edit().putBoolean(KEY_LOCK_SNAPSHOT, on).putInt(KEY_SNAPSHOT_SIG, 0).apply();
                     }
+                    else if (which == 2) prefs.edit().putBoolean(Panels.KEY_QUICK_ONE, on).apply();
+                    else if (which == 3) prefs.edit().putBoolean(Panels.KEY_WIDGETS_ONE, on).apply();
+                    else prefs.edit().putBoolean(Panels.KEY_SWAP_SWIPES, on).apply();
                 })
                 .setNeutralButton(R.string.set_notif_access, (d, w) -> openNotificationAccess())
                 .setPositiveButton(android.R.string.ok, null)
@@ -657,53 +665,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         android.app.Dialog dlg = new android.app.Dialog(this, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setBackgroundColor(0xFF15151B);
+        box.setBackground(new DiagonalBg(0xFF15151B, 26 * dp));
+        box.setPadding(0, 0, 0, Math.round(10 * dp));
 
-        // Header: the app's own stripe colour
+        // Header: the app as a little stripe + its name
         LinearLayout head = new LinearLayout(this);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.setPadding(pad, pad, pad, pad);
-        head.setBackgroundColor(app.color);
-        android.widget.ImageView iv = new android.widget.ImageView(this);
-        iv.setImageBitmap(app.icon);
-        if (app.glyph) iv.setColorFilter(app.textColor);
-        int is = Math.round(44 * dp);
-        head.addView(iv, new LinearLayout.LayoutParams(is, is));
-        TextView name = menuText(app.label, 22, app.textColor, true);
+        head.setPadding(pad, pad, pad, Math.round(6 * dp));
+        AppTileView tile = new AppTileView(this, app);
+        int is = Math.round(56 * dp);
+        head.addView(tile, new LinearLayout.LayoutParams(Math.round(is * 1.5f), is));
+        TextView name = menuText(app.label, 22, 0xFFFFFFFF, true);
         name.setPadding(Math.round(14 * dp), 0, 0, 0);
         head.addView(name);
         box.addView(head);
-
-        // Pin to one of the 4 home places
-        box.addView(menuCaption(getString(R.string.menu_pin)));
-        LinearLayout slots = new LinearLayout(this);
-        slots.setPadding(pad - Math.round(4 * dp), 0, pad - Math.round(4 * dp), Math.round(6 * dp));
-        Map<String, AppEntry> byKey = new HashMap<>();
-        for (AppEntry a : allApps) byKey.put(a.key, a);
-        for (int slot = 0; slot < HOME_SLOTS; slot++) {
-            AppEntry occ = fav[slot].isEmpty() ? lastHome[slot] : byKey.get(fav[slot]);
-            LinearLayout cell = new LinearLayout(this);
-            cell.setOrientation(LinearLayout.VERTICAL);
-            cell.setGravity(Gravity.CENTER);
-            cell.setBackgroundColor(slot == current ? 0xFFFFFFFF : (occ != null ? occ.color : 0xFF2A2A31));
-            int fg = slot == current ? 0xFF111111 : (occ != null ? occ.textColor : 0xFFFFFFFF);
-            cell.addView(menuText(String.valueOf(slot + 1), 20, fg, true));
-            TextView who = menuText(occ == null ? "—" : occ.label, 10, fg, false);
-            who.setGravity(Gravity.CENTER);
-            cell.addView(who);
-            final int s = slot;
-            cell.setOnClickListener(v -> { dlg.dismiss(); pin(app, s, from); });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, Math.round(64 * dp), 1f);
-            lp.setMargins(Math.round(4 * dp), 0, Math.round(4 * dp), 0);
-            slots.addView(cell, lp);
-        }
-        box.addView(slots);
-        if (current >= 0) {
-            box.addView(menuRow(getString(R.string.unpin), () -> {
-                dlg.dismiss();
-                String[] f = readFavorites(); f[from] = ""; saveFavorites(f); rearrange(false);
-            }));
-        }
 
         // Colour (only two-tone apps, whose icon is a glyph)
         if (app.glyph) {
@@ -751,16 +726,15 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         }));
         if (!hasUsageAccess()) box.addView(menuRow(getString(R.string.usage_allow), () -> { dlg.dismiss(); openUsageSettings(); }));
 
+        if (current >= 0) {
+            box.addView(menuRow(getString(R.string.unpin), () -> {
+                dlg.dismiss();
+                String[] f = readFavorites(); f[from] = ""; saveFavorites(f); rearrange(false);
+            }));
+        }
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
-        dlg.setContentView(sv);
-        if (dlg.getWindow() != null) {
-            dlg.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
-            dlg.getWindow().setLayout(Math.round(Math.min(getResources().getDisplayMetrics().widthPixels - 32 * dp, 420 * dp)),
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
-        shownDialog = dlg;
-        dlg.show();
+        showStyled(dlg, sv);
     }
 
     private TextView menuText(String s, float sp, int color, boolean bold) {
@@ -788,6 +762,173 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         t.setPadding(Math.round(18 * dp), Math.round(14 * dp), Math.round(18 * dp), Math.round(14 * dp));
         t.setOnClickListener(v -> action.run());
         return t;
+    }
+
+    // ---- app picker & home-apps editor ----------------------------------
+
+    interface AppChoice { void chosen(AppEntry app); }   // null = "auto"
+
+    void launch(AppEntry app) {
+        View v = diagonal;
+        Rect b = new Rect(v.getWidth() / 2 - 40, v.getHeight() / 2 - 40, v.getWidth() / 2 + 40, v.getHeight() / 2 + 40);
+        onLaunch(app, v, b);
+    }
+
+    /** Two apps for the free corners of the small quick triangle: user picks, else most used. */
+    List<AppEntry> quickApps() {
+        List<AppEntry> out = new ArrayList<>();
+        java.util.Set<String> skip = new java.util.HashSet<>();
+        for (AppEntry a : lastHome) if (a != null) skip.add(a.key);
+        Map<String, AppEntry> byKey = new HashMap<>();
+        for (AppEntry a : allApps) byKey.put(a.key, a);
+        AppEntry[] chosen = new AppEntry[QuickPanel.LEVEL1_APPS];
+        for (int i = 0; i < chosen.length; i++) {
+            AppEntry a = byKey.get(prefs.getString(Panels.KEY_QUICK_APP + i, ""));
+            if (a != null) { chosen[i] = a; skip.add(a.key); }
+        }
+        List<AppEntry> byUsage = new ArrayList<>(allApps);
+        Map<String, Long> use = usage;
+        byUsage.sort((a, b) -> Long.compare(use.getOrDefault(b.component.getPackageName(), 0L),
+                use.getOrDefault(a.component.getPackageName(), 0L)));
+        int next = 0;
+        for (int i = 0; i < chosen.length; i++) {
+            while (chosen[i] == null && next < byUsage.size()) {
+                AppEntry a = byUsage.get(next++);
+                if (skip.add(a.key)) chosen[i] = a;
+            }
+            if (chosen[i] != null) out.add(chosen[i]);
+        }
+        return out;
+    }
+
+    /** A clean app list (search + icons) used everywhere an app has to be chosen. */
+    void pickApp(String title, AppChoice choice) {
+        float dp = getResources().getDisplayMetrics().density;
+        int pad = Math.round(18 * dp);
+        android.app.Dialog dlg = new android.app.Dialog(this, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackground(new DiagonalBg(0xFF15151B, 26 * dp));
+
+        TextView head = menuText(title, 20, 0xFFFFFFFF, true);
+        head.setPadding(pad, pad, pad, Math.round(10 * dp));
+        box.addView(head);
+
+        EditText filter = new EditText(this);
+        filter.setHint(R.string.search_hint);
+        filter.setHintTextColor(0x66FFFFFF);
+        filter.setTextColor(0xFFFFFFFF);
+        filter.setSingleLine(true);
+        GradientDrawable fb = new GradientDrawable();
+        fb.setCornerRadius(14 * dp);
+        fb.setColor(0xFF24242C);
+        filter.setBackground(fb);
+        filter.setPadding(Math.round(14 * dp), Math.round(10 * dp), Math.round(14 * dp), Math.round(10 * dp));
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        flp.setMargins(pad, 0, pad, Math.round(8 * dp));
+        box.addView(filter, flp);
+
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(list);
+        box.addView(sv, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                Math.round(getResources().getDisplayMetrics().heightPixels * 0.55f)));
+
+        Collator collator = Collator.getInstance();
+        List<AppEntry> sorted = new ArrayList<>(allApps);
+        sorted.sort((a, b) -> collator.compare(a.label, b.label));
+        Runnable fill = () -> {
+            list.removeAllViews();
+            String q = filter.getText().toString().trim().toLowerCase();
+            if (q.isEmpty()) list.addView(appRow(null, getString(R.string.slot_auto_full), v -> { dlg.dismiss(); choice.chosen(null); }));
+            for (AppEntry a : sorted) {
+                if (!q.isEmpty() && !a.label.toLowerCase().contains(q)) continue;
+                list.addView(appRow(a, a.label, v -> { dlg.dismiss(); choice.chosen(a); }));
+            }
+        };
+        filter.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) { fill.run(); }
+        });
+        fill.run();
+        showStyled(dlg, box);
+    }
+
+    /** One row of the app list: a small diagonal tile in the app's colour with its icon, and the name. */
+    private View appRow(AppEntry a, String name, View.OnClickListener click) {
+        float dp = getResources().getDisplayMetrics().density;
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(Math.round(18 * dp), Math.round(6 * dp), Math.round(18 * dp), Math.round(6 * dp));
+        row.setOnClickListener(click);
+        AppTileView tile = new AppTileView(this, a);
+        int s = Math.round(44 * dp);
+        row.addView(tile, new LinearLayout.LayoutParams(Math.round(s * 1.5f), s));
+        TextView t = menuText(name, 16, 0xFFFFFFFF, true);
+        t.setPadding(Math.round(14 * dp), 0, 0, 0);
+        row.addView(t);
+        return row;
+    }
+
+    /** Long-press on the centre stripe: choose the 4 home apps. */
+    @Override
+    public void onInfoLongPress() {
+        float dp = getResources().getDisplayMetrics().density;
+        int pad = Math.round(18 * dp);
+        android.app.Dialog dlg = new android.app.Dialog(this, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackground(new DiagonalBg(0xFF15151B, 26 * dp));
+        box.setPadding(0, 0, 0, pad);
+
+        TextView head = menuText(getString(R.string.home_title), 20, 0xFFFFFFFF, true);
+        head.setPadding(pad, pad, pad, Math.round(4 * dp));
+        box.addView(head);
+        TextView hint = menuText(getString(R.string.home_hint), 13, 0x99FFFFFF, false);
+        hint.setSingleLine(false);
+        hint.setPadding(pad, 0, pad, Math.round(12 * dp));
+        box.addView(hint);
+
+        String[] fav = readFavorites();
+        Map<String, AppEntry> byKey = new HashMap<>();
+        for (AppEntry a : allApps) byKey.put(a.key, a);
+        for (int slot = 0; slot < HOME_SLOTS; slot++) {
+            boolean pinned = !fav[slot].isEmpty() && byKey.containsKey(fav[slot]);
+            AppEntry shown = pinned ? byKey.get(fav[slot]) : lastHome[slot];
+            final int s = slot;
+            String label = (slot + 1) + "   " + (shown == null ? "—" : shown.label)
+                    + (pinned ? "" : "   · " + getString(R.string.slot_auto));
+            box.addView(appRow(shown, label, v -> {
+                dlg.dismiss();
+                pickApp(getString(R.string.home_place, s + 1), app -> {
+                    if (app == null) {
+                        String[] f = readFavorites(); f[s] = ""; saveFavorites(f); rearrange(false);
+                    } else {
+                        String[] f = readFavorites();
+                        int from = -1;
+                        for (int i = 0; i < HOME_SLOTS; i++) if (app.key.equals(f[i])) from = i;
+                        pin(app, s, from);
+                    }
+                    onInfoLongPress();   // back to the editor to see the result
+                });
+            }));
+        }
+        showStyled(dlg, box);
+    }
+
+    private void showStyled(android.app.Dialog dlg, View content) {
+        float dp = getResources().getDisplayMetrics().density;
+        dlg.setContentView(content);
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
+            dlg.getWindow().setLayout(Math.round(Math.min(getResources().getDisplayMetrics().widthPixels - 32 * dp, 440 * dp)),
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        shownDialog = dlg;
+        dlg.show();
     }
 
     /** Puts app on a home slot; if it was already on another slot, the two swap places. */
@@ -913,6 +1054,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 // shuffle under the finger after every app launch.
                 if (recenter || usage.isEmpty()) usage = use;
                 rearrange(recenter);
+                panels.onAppsLoaded();
             });
         });
     }

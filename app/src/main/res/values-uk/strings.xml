@@ -79,4 +79,14 @@
     <string name="w_showers">Злива</string>
     <string name="w_snowfall">Снігопад</string>
     <string name="w_storm">Гроза</string>
+    <string name="app_card_open">Натисни, щоб відкрити</string>
+    <string name="card_other_app">Інша програма…</string>
+    <string name="quick_app_title">Програма для цього кута</string>
+    <string name="slot_auto_full">Авто (найчастіша)</string>
+    <string name="home_title">Головні програми</string>
+    <string name="home_hint">Натисни на місце, щоб вибрати програму. Авто-місця підлаштовуються під те, чим ти користуєшся найбільше.</string>
+    <string name="home_place">Головне місце %1$d</string>
+    <string name="set_quick_one">Швидкі налаштування: повністю одним свайпом</string>
+    <string name="set_widgets_one">Віджети: повністю одним свайпом</string>
+    <string name="set_swap_swipes">Поміняти два свайпи місцями</string>
 </resources>

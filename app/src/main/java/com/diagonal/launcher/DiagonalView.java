@@ -35,6 +35,7 @@ public class DiagonalView extends View {
         void onLaunch(AppEntry app, View source, Rect bounds);
         void onLongPress(AppEntry app);
         void onInfoClick();
+        void onInfoLongPress();
         /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
         void onCornerSwipe(int direction);
     }
@@ -562,8 +563,9 @@ public class DiagonalView extends View {
 
         @Override public void onLongPress(MotionEvent e) {
             int i = indexAt(e.getX(), e.getY());
-            if (i < 0 || listener == null || items.get(i).info) return;
+            if (i < 0 || listener == null) return;
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            if (items.get(i).info) { listener.onInfoLongPress(); return; }
             listener.onLongPress(items.get(i));
         }
     }

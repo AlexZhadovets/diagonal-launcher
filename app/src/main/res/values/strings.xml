@@ -79,4 +79,14 @@
     <string name="w_showers">Showers</string>
     <string name="w_snowfall">Snowfall</string>
     <string name="w_storm">Thunderstorm</string>
+    <string name="app_card_open">Tap to open</string>
+    <string name="card_other_app">Another app…</string>
+    <string name="quick_app_title">App for this corner</string>
+    <string name="slot_auto_full">Auto (most used)</string>
+    <string name="home_title">Home apps</string>
+    <string name="home_hint">Tap a place to choose its app. Auto places follow what you use most.</string>
+    <string name="home_place">Home place %1$d</string>
+    <string name="set_quick_one">Quick settings: open fully with one swipe</string>
+    <string name="set_widgets_one">Widgets: open fully with one swipe</string>
+    <string name="set_swap_swipes">Swap the two swipes</string>
 </resources>
