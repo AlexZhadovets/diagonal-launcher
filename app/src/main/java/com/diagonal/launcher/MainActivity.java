@@ -35,6 +35,7 @@ import android.widget.EditText;
 import android.widget.ScrollView;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -68,7 +69,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private TextView searchButton;
     private FrameLayout searchLayer;
     private EditText searchField;
-    private TileGridView searchGrid;
+    private ResultsView searchResults;
     private LauncherApps launcherApps;
     private SharedPreferences prefs;
     private int loadGeneration;
@@ -120,7 +121,11 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             FrameLayout.LayoutParams sp = (FrameLayout.LayoutParams) searchButton.getLayoutParams();
             sp.topMargin = insets.getSystemWindowInsetTop() + Math.round(6 * dp);
             searchButton.setLayoutParams(sp);
-            searchLayer.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom());
+            // Keep the search box right above the keyboard.
+            int bottom = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    ? insets.getInsets(WindowInsets.Type.ime() | WindowInsets.Type.navigationBars()).bottom
+                    : insets.getSystemWindowInsetBottom();
+            searchLayer.setPadding(0, insets.getSystemWindowInsetTop(), 0, bottom);
             FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) backButton.getLayoutParams();
             boolean rtl = v.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
             p.bottomMargin = margin + insets.getSystemWindowInsetBottom();
@@ -190,11 +195,25 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         root.addView(searchButton, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, Math.round(32 * dp), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
-        // Full-screen search layer: field on top, rounded tiles below.
+        // Search layer: results stacked upwards, a small search box at the bottom above the keyboard.
         searchLayer = new FrameLayout(this);
-        searchLayer.setBackgroundColor(0xF2101014);
+        searchLayer.setBackgroundColor(0xE6101014);
         searchLayer.setVisibility(View.GONE);
         searchLayer.setClickable(true);
+
+        int pad = Math.round(12 * dp);
+        int boxH = Math.round(56 * dp);
+
+        searchResults = new ResultsView(this);
+        searchResults.setListener((app, v, b) -> {
+            if (app == null) { closeSearch(); return; }   // tap on empty space closes search
+            onLaunch(app, v, b);
+            closeSearch();
+        });
+        FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        rp.bottomMargin = boxH + pad;
+        searchLayer.addView(searchResults, rp);
 
         searchField = new EditText(this);
         searchField.setHint(R.string.search_hint);
@@ -204,26 +223,15 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         searchField.setSingleLine(true);
         searchField.setImeOptions(EditorInfo.IME_ACTION_GO);
         GradientDrawable fieldBg = new GradientDrawable();
-        fieldBg.setCornerRadius(18 * dp);
-        fieldBg.setColor(0x1FFFFFFF);
+        fieldBg.setCornerRadius(22 * dp);
+        fieldBg.setColor(0xFF22222A);
         searchField.setBackground(fieldBg);
-        int pad = Math.round(16 * dp);
-        searchField.setPadding(pad, pad / 2, pad, pad / 2);
+        int ip = Math.round(18 * dp);
+        searchField.setPadding(ip, 0, ip, 0);
         FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, Math.round(52 * dp), Gravity.TOP);
-        fp.setMargins(pad, pad, pad, 0);
+                FrameLayout.LayoutParams.MATCH_PARENT, boxH, Gravity.BOTTOM);
+        fp.setMargins(pad, 0, pad, pad);
         searchLayer.addView(searchField, fp);
-
-        ScrollView scroll = new ScrollView(this);
-        scroll.setVerticalScrollBarEnabled(false);
-        searchGrid = new TileGridView(this);
-        searchGrid.setListener((app, v, b) -> { onLaunch(app, v, b); closeSearch(); });
-        scroll.addView(searchGrid);
-        FrameLayout.LayoutParams gp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
-        gp.topMargin = Math.round(52 * dp) + pad + Math.round(4 * dp);
-        gp.leftMargin = gp.rightMargin = Math.round(2 * dp);
-        searchLayer.addView(scroll, gp);
 
         searchField.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
@@ -233,7 +241,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         searchField.setOnEditorActionListener((v, actionId, event) -> {
             boolean go = actionId == EditorInfo.IME_ACTION_GO
                     || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER);
-            AppEntry top = searchGrid.first();
+            AppEntry top = searchResults.first();
             if (go && top != null) {
                 Rect b = new Rect(0, 0, v.getWidth(), v.getHeight());
                 onLaunch(top, v, b);
@@ -279,7 +287,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         starts.sort((a, b) -> collator.compare(a.label, b.label));
         contains.sort((a, b) -> collator.compare(a.label, b.label));
         starts.addAll(contains);
-        searchGrid.setApps(starts);
+        searchResults.setApps(q.isEmpty() ? new ArrayList<>() : starts); // nothing until you type
     }
 
     @SuppressWarnings("deprecation")

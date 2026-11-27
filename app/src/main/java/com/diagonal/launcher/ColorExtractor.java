@@ -38,49 +38,51 @@ final class ColorExtractor {
         bmp.getPixels(px, 0, w, 0, 0, w, h);
 
         int bg = edgeColor(px, w, h);
-        boolean bgLight = bg != NONE && lum(bg) > 0.78 && sat(bg) < 0.2;
+        if (bg == NONE) return new Result(Color.DKGRAY, 0xFFFFFFFF, bmp);
+        boolean bgLight = lum(bg) > 0.78 && sat(bg) < 0.2;
 
-        // Foreground statistics (everything that is clearly not the tile background).
-        float[] weight = new float[BUCKETS];
-        float[] rS = new float[BUCKETS], gS = new float[BUCKETS], bS = new float[BUCKETS];
-        float[] hsv = new float[3];
-        long fr = 0, fg = 0, fb = 0;
-        int fgCount = 0;
+        // Pass 1: most common foreground colour (everything clearly not the tile).
         int step = Math.max(1, Math.min(w, h) / 48);
+        int[] counts = new int[512];
+        long[] rS = new long[512], gS = new long[512], bS = new long[512];
+        int opaque = 0, nearBg = 0;
         for (int y = 0; y < h; y += step) {
             for (int x = 0; x < w; x += step) {
                 int c = px[y * w + x];
                 if (Color.alpha(c) < 200) continue;
-                if (bg != NONE && dist(c, bg) < 90) continue;
-                int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
-                fr += r; fg += g; fb += b; fgCount++;
-                Color.RGBToHSV(r, g, b, hsv);
-                if (hsv[1] < 0.25f || hsv[2] < 0.2f) continue;
-                int k = Math.min(BUCKETS - 1, (int) (hsv[0] / 360f * BUCKETS));
-                float wt = hsv[1] * hsv[2];
-                weight[k] += wt; rS[k] += r * wt; gS[k] += g * wt; bS[k] += b * wt;
+                opaque++;
+                if (dist(c, bg) < 90) { nearBg++; continue; }
+                int q = ((Color.red(c) >> 5) << 6) | ((Color.green(c) >> 5) << 3) | (Color.blue(c) >> 5);
+                counts[q]++; rS[q] += Color.red(c); gS[q] += Color.green(c); bS[q] += Color.blue(c);
             }
         }
+        int best = -1;
+        for (int q = 0; q < 512; q++) if (counts[q] > 0 && (best < 0 || counts[q] > counts[best])) best = q;
+        if (best < 0 || opaque == 0) return new Result(bg, textColorFor(bg), bmp); // flat tile
 
-        int color;
-        if (bg == NONE || bgLight) {
-            int best = -1;
-            float bw = 0f;
-            for (int k = 0; k < BUCKETS; k++) if (weight[k] > bw) { bw = weight[k]; best = k; }
-            if (best >= 0) {
-                color = Color.rgb(Math.round(rS[best] / bw), Math.round(gS[best] / bw), Math.round(bS[best] / bw));
-            } else if (fgCount > 0) {
-                color = Color.rgb((int) (fr / fgCount), (int) (fg / fgCount), (int) (fb / fgCount));
-            } else {
-                color = bg == NONE ? Color.DKGRAY : bg;
+        int fgColor = Color.rgb((int) (rS[best] / counts[best]), (int) (gS[best] / counts[best]),
+                (int) (bS[best] / counts[best]));
+
+        // Pass 2: is the icon just "tile + one colour"? Gradients, photos and
+        // multi-colour logos (Chrome, Instagram, games) are not.
+        int nearFg = 0;
+        for (int y = 0; y < h; y += step) {
+            for (int x = 0; x < w; x += step) {
+                int c = px[y * w + x];
+                if (Color.alpha(c) < 200 || dist(c, bg) < 90) continue;
+                if (dist(c, fgColor) < 100) nearFg++;
             }
-        } else {
-            color = bg;
         }
-        int text = textColorFor(color);
-        Bitmap glyph = makeGlyph(px, w, h, bg, text);
-        if (glyph == null) glyph = bmp; // icon is one flat colour: keep the original
-        return new Result(color, text, glyph);
+        boolean twoTone = (nearBg + nearFg) >= opaque * 0.9f && nearFg > 0;
+
+        if (twoTone && bgLight) {
+            // DeepSeek / YouTube style: stripe takes the logo colour, logo becomes a white glyph.
+            int text = textColorFor(fgColor);
+            Bitmap glyph = makeGlyph(px, w, h, bg, text);
+            return new Result(fgColor, text, glyph != null ? glyph : bmp);
+        }
+        // Old scheme: stripe = the icon's tile colour, icon drawn as is.
+        return new Result(bg, textColorFor(bg), bmp);
     }
 
     /** Pixels far from the tile background become the text colour; the rest transparent. */
