@@ -201,7 +201,6 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         super.onStop();
         info.stop();
         panels.onStop();
-        if (panels.expectingResult) return;   // adding a widget: keep everything as it is
         // Leaving for another app: be back at the start when the user returns.
         closeSearch();
         panels.closeAll();
@@ -240,14 +239,6 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         return super.dispatchTouchEvent(ev);
     }
 
-    @SuppressWarnings("deprecation")
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == Panels.REQ_BIND || requestCode == Panels.REQ_CONFIG) {
-            panels.onActivityResult(requestCode, resultCode, data);
-        }
-    }
 
     // ---- corner panels & centre stripe ---------------------------------
 
@@ -256,8 +247,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     @Override
     public void onInfoClick() {
-        if (info.media != null) { info.playPause(); return; }
         if (info.notif != null) { info.openNotification(); return; }
+        if (info.media != null) { info.playPause(); return; }
         if (!info.hasNotificationAccess()) { openNotificationAccess(); return; }
         startFirst(new Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS));
     }
@@ -266,7 +257,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private void updateInfoStripe() {
         InfoHub.Media m = info.media;
         InfoHub.Notif n = info.notif;
-        if (m != null) {
+        if (m != null && n == null) {
             if (m.art != lastArt) {
                 // new track art: scale + colour off the main thread, then redraw
                 final Bitmap art = m.art;
@@ -286,12 +277,13 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             int c = lastArtColor;
             diagonal.setInfo(m.title, (m.playing ? "" : "⏸  ") + m.artist, lastArtScaled, c, ColorExtractor.textColorFor(c));
         } else if (n != null) {
+            // clock stays; the fresh notification is just a small line under it for a few seconds
             AppEntry app = null;
             for (AppEntry a : allApps) if (a.component.getPackageName().equals(n.pkg)) { app = a; break; }
-            int c = app != null ? app.color : 0xFF26262E;
-            int tc = app != null ? app.textColor : 0xFFFFFFFF;
-            String title = n.title.isEmpty() ? (app != null ? app.label : "") : n.title;
-            diagonal.setInfo(title, n.text, app != null ? app.icon : null, c, tc);
+            String from = app != null ? app.label : "";
+            String who = n.title.isEmpty() ? from : (from.isEmpty() ? n.title : from + " · " + n.title);
+            String line = "● " + who + (n.text.isEmpty() ? "" : ": " + n.text);
+            diagonal.setInfo(info.time(), line, null, 0xFF16161C, 0xFFFFFFFF);
         } else {
             String sub = info.date();
             if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
@@ -305,6 +297,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     }
 
     void showDialog(AlertDialog.Builder b) { shownDialog = b.show(); }
+
+    void showDialog(AlertDialog d) { d.show(); shownDialog = d; }
 
     /** Launcher settings (the "Діагональ" tile in the big quick panel). */
     void showLauncherSettings() {

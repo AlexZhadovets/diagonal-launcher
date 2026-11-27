@@ -63,7 +63,8 @@ final class InfoHub {
 
     private static final long WEATHER_EVERY_MS = 30 * 60 * 1000L;
     private static final long SHOW_PAUSED_MS = 5 * 60 * 1000L;
-    private static final long NOTIF_MAX_AGE_MS = 12 * 60 * 60 * 1000L;
+    /** A new notification shows on the centre stripe only for this long after it arrives. */
+    static final long NOTIF_SHOW_MS = 8000L;
 
     private final Context ctx;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -124,6 +125,8 @@ final class InfoHub {
     void destroy() { net.shutdownNow(); }
 
     void resetWeather() { weatherAt = 0; }
+
+    private final Runnable expire = this::refresh;
 
     void refresh() {
         readMedia();
@@ -251,23 +254,17 @@ final class InfoHub {
 
     private void readNotification() {
         notif = null;
-        NotifService svc = NotifService.instance;
-        if (svc == null) return;
-        StatusBarNotification[] all;
-        try { all = svc.getActiveNotifications(); } catch (RuntimeException e) { return; }
-        if (all == null) return;
-        StatusBarNotification best = null;
-        long now = System.currentTimeMillis();
-        for (StatusBarNotification sbn : all) {
-            Notification n = sbn.getNotification();
-            if (n == null || sbn.isOngoing() || !sbn.isClearable()) continue;
-            if (sbn.getPackageName().equals(ctx.getPackageName())) continue;
-            if ((n.flags & Notification.FLAG_GROUP_SUMMARY) != 0) continue;
-            if (Notification.CATEGORY_TRANSPORT.equals(n.category)) continue;
-            if (now - sbn.getPostTime() > NOTIF_MAX_AGE_MS) continue;
-            if (best == null || sbn.getPostTime() > best.getPostTime()) best = sbn;
-        }
-        if (best == null) return;
+        // Only the notification that has *just* arrived, for a few seconds — not ones that sit in the shade.
+        StatusBarNotification best = NotifService.lastPosted;
+        long age = System.currentTimeMillis() - NotifService.lastPostedAt;
+        if (best == null || age > NOTIF_SHOW_MS) return;
+        Notification bn = best.getNotification();
+        if (bn == null || best.isOngoing() || !best.isClearable()) return;
+        if (best.getPackageName().equals(ctx.getPackageName())) return;
+        if ((bn.flags & Notification.FLAG_GROUP_SUMMARY) != 0) return;
+        if (Notification.CATEGORY_TRANSPORT.equals(bn.category)) return;
+        main.removeCallbacks(expire);
+        main.postDelayed(expire, NOTIF_SHOW_MS - age + 50);
         Notification n = best.getNotification();
         Bundle ex = n.extras;
         Notif out = new Notif();

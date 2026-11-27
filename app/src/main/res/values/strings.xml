@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Діагональ</string>
+    <string name="app_name">Diagonal</string>
     <string name="back_to_default">Повернутись до стандартного робочого столу</string>
     <string name="no_apps">Немає програм</string>
     <string name="loading">Завантаження…</string>
@@ -9,7 +9,7 @@
     <string name="section_usage">ЗА ЧАСОМ ВИКОРИСТАННЯ ↑</string>
     <string name="section_alpha">ЗА АЛФАВІТОМ ↓</string>
     <string name="usage_title">Сортування за часом використання</string>
-    <string name="usage_message">Щоб показувати програми за тим, скільки часу ти в них проводиш, дозволь «Діагоналі» доступ до статистики використання. Без цього порядок рахується за кількістю запусків із цього робочого столу.</string>
+    <string name="usage_message">Щоб показувати програми за тим, скільки часу ти в них проводиш, дозволь Diagonal доступ до статистики використання. Без цього порядок рахується за кількістю запусків із цього робочого столу.</string>
     <string name="usage_allow">Дозволити доступ до статистики</string>
     <string name="later">Пізніше</string>
     <string name="slot_auto">авто</string>
@@ -24,5 +24,5 @@
     <string name="set_lock_snapshot">Робочий стіл на екрані блокування (шпалери)</string>
     <string name="set_notif_access">Доступ до сповіщень</string>
     <string name="notif_title">Музика і сповіщення</string>
-    <string name="notif_message">Щоб центральна смуга показувала музику, що грає, і нові повідомлення, дозволь «Діагоналі» доступ до сповіщень. Без цього там буде годинник і погода.</string>
+    <string name="notif_message">Щоб центральна смуга показувала музику, що грає, і нові повідомлення, дозволь Diagonal доступ до сповіщень. Без цього там буде годинник і погода.</string>
 </resources>

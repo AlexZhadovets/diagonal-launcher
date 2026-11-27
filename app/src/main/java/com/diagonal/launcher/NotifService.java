@@ -13,6 +13,9 @@ public class NotifService extends NotificationListenerService {
 
     static volatile NotifService instance;
     static volatile Runnable onChange;
+    /** The notification that just arrived (shown briefly on the centre stripe). */
+    static volatile StatusBarNotification lastPosted;
+    static volatile long lastPostedAt;
 
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -25,7 +28,11 @@ public class NotifService extends NotificationListenerService {
 
     @Override public void onListenerDisconnected() { instance = null; changed(); }
 
-    @Override public void onNotificationPosted(StatusBarNotification sbn) { changed(); }
+    @Override public void onNotificationPosted(StatusBarNotification sbn) {
+        lastPosted = sbn;
+        lastPostedAt = System.currentTimeMillis();
+        changed();
+    }
 
     @Override public void onNotificationRemoved(StatusBarNotification sbn) { changed(); }
 }

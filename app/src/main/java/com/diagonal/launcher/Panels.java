@@ -54,14 +54,12 @@ import java.util.Locale;
  */
 final class Panels {
 
-    static final int REQ_BIND = 41, REQ_CONFIG = 42;
-    private static final int HOST_ID = 7301;
-    private static final String KEY_WIDGETS = "widgets";
-
     // Quick-settings tile ids (also their order: the first 4 are the small triangle).
     private static final int T_BT = 0, T_NET = 1, T_WALLET = 2, T_TORCH = 3, T_WIFI = 4, T_SOUND = 5,
             T_DND = 6, T_ROTATE = 7, T_NFC = 8, T_HOTSPOT = 9, T_LOCATION = 10, T_ALARM = 11,
             T_PLANE = 12, T_CAMERA = 13, T_SHADE = 14, T_SETTINGS = 15;
+
+    static final String CLAUDE_PKG = "com.anthropic.claude";
 
     private final MainActivity act;
     private final InfoHub info;
@@ -69,48 +67,30 @@ final class Panels {
     private final float dp;
     final QuickPanel quick;
     final WidgetPanel widgets;
-    private final LinearLayout widgetList;
-    private final AppWidgetHost host;
-    private final AppWidgetManager awm;
     private final List<QuickPanel.Tile> tiles = new ArrayList<>();
     private final GestureDetector outside;
     private boolean downInside;
-    boolean expectingResult;
+    private boolean flung;   // the current gesture was an along-stripe fling (steps a panel)
 
-    // built-in cards
-    private TextView musicTitle, musicArtist, musicPlay, weatherBig, weatherSmall;
+    // own widgets
+    private TextView musicTitle, musicArtist, musicPlay;
     private ImageView musicArt;
-    private View musicCard;
+    private LinearLayout chatRow, claudeChips;
+    private TextView chatHint;
 
     private boolean torchOn;
     private String torchId;
-    private int pendingWidgetId = -1;
-    private AppWidgetProviderInfo pendingInfo;
 
     Panels(MainActivity act, FrameLayout root, InfoHub info, SharedPreferences prefs) {
         this.act = act;
         this.info = info;
         this.prefs = prefs;
         dp = act.getResources().getDisplayMetrics().density;
-        awm = AppWidgetManager.getInstance(act);
-        host = new AppWidgetHost(act.getApplicationContext(), HOST_ID);
 
-        // ---- widget window -------------------------------------------------
+        // ---- widget window (staircase of own cards) ------------------------
         widgets = new WidgetPanel(act);
-        ScrollView scroll = new ScrollView(act);
-        scroll.setFillViewport(true);
-        scroll.setVerticalScrollBarEnabled(false);
-        widgetList = new LinearLayout(act);
-        widgetList.setOrientation(LinearLayout.VERTICAL);
-        widgetList.setGravity(Gravity.BOTTOM);
-        // tap on empty space in the widget window = step back one level (full screen → peek → closed)
-        widgetList.setOnClickListener(v -> widgets.setLevel(widgets.level() - 1));
-        int pad = Math.round(12 * dp);
-        widgetList.setPadding(pad, pad, pad, pad);
-        scroll.addView(widgetList, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        widgets.addView(scroll, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        widgets.setOnEmptyTap(() -> widgets.setLevel(widgets.level() - 1));
+        buildWidgetCards();
         root.addView(widgets, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -124,13 +104,14 @@ final class Panels {
         outside = new GestureDetector(act, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onSingleTapUp(MotionEvent e) {
                 if (!downInside) closeAll();
-                return true;
+                return false;   // a tap is not a swipe: never cancel taps on tiles/cards
             }
             @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
                 if (e1 == null) return false;
                 float tx = e2.getX() - e1.getX(), ty = e2.getY() - e1.getY();
                 float along = (tx - ty) * 0.7071f, across = (tx + ty) * 0.7071f;
-                if (Math.abs(along) < 56 * dp || Math.abs(along) < Math.abs(across) * 1.3f) return false;
+                if (Math.abs(along) < 56 * dp || Math.abs(along) < Math.abs(across) * 2.4f) return false;
+                flung = true;
                 onCornerSwipe(along > 0 ? 1 : -1);
                 return true;
             }
@@ -159,18 +140,12 @@ final class Panels {
 
     void setInsets(int top, int bottom) {
         quick.setTopInset(top);
-        widgetList.setPadding(widgetList.getPaddingLeft(), top + Math.round(12 * dp),
-                widgetList.getPaddingRight(), bottom + Math.round(12 * dp));
+        widgets.setInsets(top, bottom);
     }
 
-    void onStart() {
-        try { host.startListening(); } catch (RuntimeException ignored) { }
-        rebuildWidgets();
-    }
+    void onStart() { refreshShortcuts(); }
 
-    void onStop() {
-        try { host.stopListening(); } catch (RuntimeException ignored) { }
-    }
+    void onStop() { }
 
     boolean isOpen() { return quick.level() > 0 || widgets.level() > 0; }
 
@@ -187,25 +162,27 @@ final class Panels {
             quick.setLevel(Math.min(2, quick.level() + 1));
         } else {
             if (quick.level() > 0) { quick.setLevel(quick.level() - 1); return; }
+            if (widgets.level() == 0) refreshShortcuts();
             widgets.setLevel(Math.min(2, widgets.level() + 1));
         }
     }
 
-    /** While a panel is open: outside taps close it, along-stripe swipes step it. */
+    /** While a panel is open: outside taps close it, along-stripe flings step it. */
     boolean dispatch(MotionEvent e) {
         if (!isOpen()) return false;
         if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
             downInside = quick.contains(e.getX(), e.getY()) || widgets.contains(e.getX(), e.getY());
+            flung = false;
         }
-        boolean swiped = outside.onTouchEvent(e);
-        if (swiped && downInside) {
+        outside.onTouchEvent(e);
+        if (flung && downInside) {
             MotionEvent cancel = MotionEvent.obtain(e);
             cancel.setAction(MotionEvent.ACTION_CANCEL);
             act.superDispatch(cancel);   // let the panel's own views finish their gesture
             cancel.recycle();
             return true;
         }
-        return !downInside || swiped; // outside touches never reach the stripes underneath
+        return !downInside; // touches outside never reach the stripes underneath
     }
 
     // ---- quick settings -------------------------------------------------
@@ -213,7 +190,7 @@ final class Panels {
     private void buildTiles() {
         String[] names = {"Bluetooth", "Інтернет", "Гаманець", "Ліхтарик", "Wi-Fi", "Звук",
                 "Не турбувати", "Автоповорот", "NFC", "Точка доступу", "Геолокація", "Будильник",
-                "Політ", "Камера", "Шторка", "Діагональ"};
+                "Політ", "Камера", "Шторка", "Diagonal"};
         int[] icons = {Icons.BLUETOOTH, Icons.INTERNET, Icons.WALLET, Icons.TORCH, Icons.WIFI, Icons.SOUND,
                 Icons.DND, Icons.ROTATE, Icons.NFC, Icons.HOTSPOT, Icons.LOCATION, Icons.ALARM,
                 Icons.AIRPLANE, Icons.CAMERA, Icons.SHADE, Icons.SETTINGS};
@@ -371,7 +348,10 @@ final class Panels {
         }
     }
 
-    // ---- widget window --------------------------------------------------
+    // ---- widget window: own cards that fit the triangle -----------------
+
+    private final java.util.concurrent.ExecutorService shortcutWorker =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
 
     private GradientDrawable cardBg(int color) {
         GradientDrawable g = new GradientDrawable();
@@ -390,65 +370,11 @@ final class Panels {
         return t;
     }
 
-    private LinearLayout.LayoutParams cardLp(int heightPx) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, heightPx);
-        lp.topMargin = Math.round(10 * dp);
-        return lp;
-    }
+    /** Cards are added bottom-first: player (in the corner), chats, Claude. */
+    private void buildWidgetCards() {
+        int pad = Math.round(14 * dp);
 
-    /** [ + add widget ] [ hosted widgets… ] [ weather ] [ music ]  (music sits in the corner). */
-    void rebuildWidgets() {
-        widgetList.removeAllViews();
-        int pad = Math.round(16 * dp);
-
-        TextView add = text(15, 0xCCFFFFFF, true);
-        add.setText("+  Додати віджет");
-        add.setGravity(Gravity.CENTER);
-        add.setBackground(cardBg(0xFF1E1E25));
-        add.setOnClickListener(v -> pickWidget());
-        widgetList.addView(add, cardLp(Math.round(52 * dp)));
-
-        for (int id : savedWidgetIds()) {
-            AppWidgetProviderInfo wi = awm.getAppWidgetInfo(id);
-            if (wi == null) continue;
-            FrameLayout card = new FrameLayout(act);
-            card.setBackground(cardBg(0xFF1E1E25));
-            card.setClipToOutline(true);
-            AppWidgetHostView hv = host.createView(act.getApplicationContext(), id, wi);
-            card.addView(hv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT));
-            TextView remove = text(14, 0x99FFFFFF, true);
-            remove.setText("×");
-            remove.setGravity(Gravity.CENTER);
-            int rs = Math.round(28 * dp);
-            remove.setOnClickListener(v -> removeWidget(id));
-            card.addView(remove, new FrameLayout.LayoutParams(rs, rs, Gravity.TOP | Gravity.END));
-            int h = Math.max(wi.minHeight, Math.round(120 * dp));
-            int wDp = Math.round((act.getResources().getDisplayMetrics().widthPixels - 24 * dp) / dp);
-            int hDp = Math.round(h / dp);
-            try {
-                Bundle opts = new Bundle();
-                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, wDp);
-                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, wDp);
-                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, hDp);
-                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, hDp);
-                awm.updateAppWidgetOptions(id, opts);
-            } catch (RuntimeException ignored) { }
-            widgetList.addView(card, cardLp(h));
-        }
-
-        LinearLayout weather = new LinearLayout(act);
-        weather.setOrientation(LinearLayout.VERTICAL);
-        weather.setGravity(Gravity.CENTER_VERTICAL);
-        weather.setPadding(pad, pad, pad, pad);
-        weather.setBackground(cardBg(0xFF1B2A4A));
-        weatherBig = text(40, 0xFFFFFFFF, true);
-        weatherSmall = text(15, 0xCCFFFFFF, false);
-        weather.addView(weatherBig);
-        weather.addView(weatherSmall);
-        weather.setOnClickListener(v -> act.startFirst(new Intent(AlarmClock.ACTION_SHOW_ALARMS)));
-        widgetList.addView(weather, cardLp(Math.round(130 * dp)));
-
+        // Player
         LinearLayout music = new LinearLayout(act);
         music.setOrientation(LinearLayout.HORIZONTAL);
         music.setGravity(Gravity.CENTER_VERTICAL);
@@ -458,30 +384,76 @@ final class Panels {
         musicArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
         musicArt.setClipToOutline(true);
         musicArt.setBackground(cardBg(0xFF33333C));
-        int art = Math.round(72 * dp);
+        int art = Math.round(64 * dp);
         music.addView(musicArt, new LinearLayout.LayoutParams(art, art));
         LinearLayout texts = new LinearLayout(act);
         texts.setOrientation(LinearLayout.VERTICAL);
-        texts.setPadding(pad, 0, pad / 2, 0);
-        musicTitle = text(18, 0xFFFFFFFF, true);
-        musicArtist = text(14, 0xBBFFFFFF, false);
+        texts.setPadding(pad, 0, 0, 0);
+        musicTitle = text(17, 0xFFFFFFFF, true);
+        musicArtist = text(13, 0xBBFFFFFF, false);
         texts.addView(musicTitle);
         texts.addView(musicArtist);
         LinearLayout buttons = new LinearLayout(act);
-        buttons.setPadding(0, Math.round(6 * dp), 0, 0);
-        TextView prev = control("⏮", v -> { info.previous(); });
+        buttons.addView(control("⏮", v -> info.previous()));
         musicPlay = control("▶", v -> {
             if (!info.hasNotificationAccess()) act.openNotificationAccess();
             else info.playPause();
         });
-        TextView next = control("⏭", v -> { info.next(); });
-        buttons.addView(prev);
         buttons.addView(musicPlay);
-        buttons.addView(next);
+        buttons.addView(control("⏭", v -> info.next()));
         texts.addView(buttons);
         music.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        musicCard = music;
-        widgetList.addView(music, cardLp(Math.round(140 * dp)));
+        music.setOnClickListener(v -> {
+            InfoHub.Media mm = info.media;
+            if (mm != null && mm.controller != null && mm.controller.getSessionActivity() != null) {
+                try { InfoHub.sendAllowingStart(act, mm.controller.getSessionActivity()); } catch (Exception ignored) { }
+            }
+        });
+        widgets.addView(music, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(128 * dp)));
+
+        // Chats: recent conversations (shortcuts published by messengers)
+        LinearLayout chats = new LinearLayout(act);
+        chats.setOrientation(LinearLayout.VERTICAL);
+        chats.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
+        chats.setBackground(cardBg(0xFF1E2433));
+        TextView chatsTitle = text(12, 0x99FFFFFF, true);
+        chatsTitle.setText("ЧАТИ");
+        chatsTitle.setLetterSpacing(0.15f);
+        chats.addView(chatsTitle);
+        chatRow = new LinearLayout(act);
+        chatRow.setOrientation(LinearLayout.HORIZONTAL);
+        chatRow.setPadding(0, Math.round(6 * dp), 0, 0);
+        chatHint = text(13, 0xAAFFFFFF, false);
+        chats.addView(chatRow);
+        chats.addView(chatHint);
+        widgets.addView(chats, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(118 * dp)));
+
+        // Claude: ask box + Claude's own shortcuts
+        LinearLayout claude = new LinearLayout(act);
+        claude.setOrientation(LinearLayout.VERTICAL);
+        claude.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
+        claude.setBackground(cardBg(0xFFC96442));
+        TextView claudeTitle = text(12, 0xCCFFFFFF, true);
+        claudeTitle.setText("CLAUDE");
+        claudeTitle.setLetterSpacing(0.15f);
+        claude.addView(claudeTitle);
+        TextView ask = text(16, 0xFF5A2A1A, true);
+        ask.setText("Запитай Claude…");
+        ask.setGravity(Gravity.CENTER_VERTICAL);
+        ask.setPadding(pad, 0, pad, 0);
+        GradientDrawable askBg = new GradientDrawable();
+        askBg.setCornerRadius(18 * dp);
+        askBg.setColor(0xFFF5E6DD);
+        ask.setBackground(askBg);
+        ask.setOnClickListener(v -> askClaude());
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(44 * dp));
+        alp.topMargin = Math.round(6 * dp);
+        claude.addView(ask, alp);
+        claudeChips = new LinearLayout(act);
+        claudeChips.setOrientation(LinearLayout.HORIZONTAL);
+        claudeChips.setPadding(0, Math.round(8 * dp), 0, 0);
+        claude.addView(claudeChips);
+        widgets.addView(claude, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(140 * dp)));
 
         updateCards();
     }
@@ -491,17 +463,13 @@ final class Panels {
         t.setText(label);
         t.setGravity(Gravity.CENTER);
         t.setOnClickListener(l);
-        int s = Math.round(48 * dp);
+        int s = Math.round(44 * dp);
         t.setLayoutParams(new LinearLayout.LayoutParams(s, s));
         return t;
     }
 
     void updateCards() {
-        if (weatherBig == null) return;
-        weatherBig.setText(info.time());
-        String w = info.weather.isEmpty() ? info.date() : info.date() + "  ·  " + info.weather;
-        weatherSmall.setText(w);
-
+        if (musicTitle == null) return;
         InfoHub.Media m = info.media;
         if (!info.hasNotificationAccess()) {
             musicTitle.setText("Музика");
@@ -519,132 +487,195 @@ final class Panels {
             musicArt.setImageBitmap(m.art);
             musicPlay.setText(m.playing ? "⏸" : "▶");
         }
-        if (musicCard != null) {
-            musicCard.setOnClickListener(v -> {
-                InfoHub.Media mm = info.media;
-                if (mm != null && mm.controller != null && mm.controller.getSessionActivity() != null) {
-                    try { InfoHub.sendAllowingStart(act, mm.controller.getSessionActivity()); } catch (Exception ignored) { }
+    }
+
+    // ---- Claude ---------------------------------------------------------
+
+    private void askClaude() {
+        android.widget.EditText input = new android.widget.EditText(act);
+        input.setHint("Твоє питання");
+        input.setMinLines(2);
+        int p = Math.round(20 * dp);
+        FrameLayout box = new FrameLayout(act);
+        box.setPadding(p, Math.round(8 * dp), p, 0);
+        box.addView(input);
+        AlertDialog d = new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Claude")
+                .setView(box)
+                .setPositiveButton("Надіслати", (dlg, w) -> sendToClaude(input.getText().toString().trim()))
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        d.setOnShowListener(x -> {
+            input.requestFocus();
+            if (d.getWindow() != null) {
+                d.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+            }
+        });
+        act.showDialog(d);
+    }
+
+    /** Opens the Claude app with the question (share), or claude.ai if the app isn't installed. */
+    private void sendToClaude(String q) {
+        closeAll();
+        if (q.isEmpty()) {
+            Intent open = act.getPackageManager().getLaunchIntentForPackage(CLAUDE_PKG);
+            act.startFirst(open != null ? open : new Intent(Intent.ACTION_VIEW, Uri.parse("https://claude.ai/new")));
+            return;
+        }
+        Intent share = new Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, q).setPackage(CLAUDE_PKG);
+        Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse("https://claude.ai/new?q=" + Uri.encode(q)));
+        act.startFirst(share, web);
+    }
+
+    // ---- shortcuts: chats + Claude chips ---------------------------------
+
+    private static final class Sc {
+        android.content.pm.ShortcutInfo info;
+        android.graphics.Bitmap icon;
+        String label;
+    }
+
+    void refreshShortcuts() {
+        final android.content.pm.LauncherApps la = act.getSystemService(android.content.pm.LauncherApps.class);
+        final int density = act.getResources().getDisplayMetrics().densityDpi;
+        final int iconPx = Math.round(46 * dp);
+        shortcutWorker.execute(() -> {
+            List<Sc> chats = new ArrayList<>();
+            List<Sc> claude = new ArrayList<>();
+            boolean allowed;
+            try { allowed = la.hasShortcutHostPermission(); } catch (RuntimeException e) { allowed = false; }
+            if (allowed) {
+                List<android.content.pm.ShortcutInfo> all = new ArrayList<>();
+                try {
+                    android.content.pm.LauncherApps.ShortcutQuery q = new android.content.pm.LauncherApps.ShortcutQuery();
+                    int flags = android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC
+                            | android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED
+                            | android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST;
+                    if (Build.VERSION.SDK_INT >= 30) flags |= android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_CACHED;
+                    q.setQueryFlags(flags);
+                    List<android.content.pm.ShortcutInfo> got = la.getShortcuts(q, Process.myUserHandle());
+                    if (got != null) all.addAll(got);
+                    if (all.isEmpty()) {
+                        // some Android builds want one package per query
+                        for (android.content.pm.LauncherActivityInfo ai : la.getActivityList(null, Process.myUserHandle())) {
+                            q.setPackage(ai.getComponentName().getPackageName());
+                            try {
+                                List<android.content.pm.ShortcutInfo> one = la.getShortcuts(q, Process.myUserHandle());
+                                if (one != null) all.addAll(one);
+                            } catch (RuntimeException ignored) { }
+                        }
+                    }
+                } catch (RuntimeException ignored) { }
+                all.sort((a, b) -> Long.compare(b.getLastChangedTimestamp(), a.getLastChangedTimestamp()));
+                java.util.Set<String> seen = new java.util.HashSet<>();
+                for (android.content.pm.ShortcutInfo si : all) {
+                    if (!si.isEnabled()) continue;
+                    String pkg = si.getPackage();
+                    if (pkg.equals(act.getPackageName())) continue;
+                    if (CLAUDE_PKG.equals(pkg)) {
+                        if (claude.size() < 3 && seen.add(si.getId() + pkg)) claude.add(load(la, si, density, iconPx));
+                        continue;
+                    }
+                    if (chats.size() >= 8 || !isConversation(si)) continue;
+                    if (!seen.add(pkg + "/" + si.getShortLabel())) continue;
+                    chats.add(load(la, si, density, iconPx));
                 }
-            });
+            }
+            final boolean ok = allowed;
+            act.runOnUiThread(() -> showShortcuts(chats, claude, ok));
+        });
+    }
+
+    private static boolean isConversation(android.content.pm.ShortcutInfo si) {
+        if (Build.VERSION.SDK_INT >= 30 && si.isLongLived()) return true;
+        java.util.Set<String> cats = si.getCategories();
+        if (cats == null) return false;
+        for (String c : cats) {
+            if (c.contains("conversation") || c.contains("SHARE_TARGET") || c.contains("share")) return true;
         }
+        return false;
     }
 
-    private List<Integer> savedWidgetIds() {
-        List<Integer> out = new ArrayList<>();
-        for (String s : prefs.getString(KEY_WIDGETS, "").split(",")) {
-            try { if (!s.isEmpty()) out.add(Integer.parseInt(s)); } catch (NumberFormatException ignored) { }
-        }
-        return out;
-    }
-
-    private void saveWidgetIds(List<Integer> ids) {
-        prefs.edit().putString(KEY_WIDGETS, TextUtils.join(",", ids)).apply();
-    }
-
-    private void removeWidget(int id) {
-        List<Integer> ids = savedWidgetIds();
-        ids.remove(Integer.valueOf(id));
-        saveWidgetIds(ids);
-        try { host.deleteAppWidgetId(id); } catch (RuntimeException ignored) { }
-        rebuildWidgets();
-    }
-
-    private void pickWidget() {
-        List<AppWidgetProviderInfo> list;
+    private Sc load(android.content.pm.LauncherApps la, android.content.pm.ShortcutInfo si, int density, int px) {
+        Sc s = new Sc();
+        s.info = si;
+        CharSequence l = si.getShortLabel();
+        s.label = l == null ? "" : l.toString();
         try {
-            list = new ArrayList<>(awm.getInstalledProvidersForProfile(Process.myUserHandle()));
-        } catch (RuntimeException e) {
-            return;
+            android.graphics.drawable.Drawable d = la.getShortcutIconDrawable(si, density);
+            if (d == null) d = la.getShortcutBadgedIconDrawable(si, density);
+            if (d != null) {
+                android.graphics.Bitmap b = android.graphics.Bitmap.createBitmap(px, px, android.graphics.Bitmap.Config.ARGB_8888);
+                android.graphics.Canvas c = new android.graphics.Canvas(b);
+                android.graphics.Path clip = new android.graphics.Path();
+                clip.addCircle(px / 2f, px / 2f, px / 2f, android.graphics.Path.Direction.CW);
+                c.clipPath(clip);   // round avatars
+                d.setBounds(0, 0, px, px);
+                d.draw(c);
+                s.icon = b;
+            }
+        } catch (RuntimeException ignored) { }
+        return s;
+    }
+
+    private void showShortcuts(List<Sc> chats, List<Sc> claude, boolean allowed) {
+        chatRow.removeAllViews();
+        if (!allowed) chatHint.setText("Зроби Diagonal головним екраном, щоб бачити чати");
+        else if (chats.isEmpty()) chatHint.setText("Месенджери ще не показали останні чати");
+        else chatHint.setText("");
+        int cell = Math.round(62 * dp);
+        for (Sc s : chats) {
+            LinearLayout item = new LinearLayout(act);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setGravity(Gravity.CENTER_HORIZONTAL);
+            ImageView iv = new ImageView(act);
+            iv.setImageBitmap(s.icon);
+            int a = Math.round(46 * dp);
+            item.addView(iv, new LinearLayout.LayoutParams(a, a));
+            TextView name = text(11, 0xDDFFFFFF, false);
+            name.setText(s.label);
+            name.setGravity(Gravity.CENTER);
+            item.addView(name, new LinearLayout.LayoutParams(cell, ViewGroup.LayoutParams.WRAP_CONTENT));
+            item.setOnClickListener(v -> startShortcut(s.info));
+            chatRow.addView(item, new LinearLayout.LayoutParams(cell, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
-        Collator collator = Collator.getInstance();
-        java.util.Map<String, String> appNames = new java.util.HashMap<>();
-        for (AppWidgetProviderInfo wi : list) {
-            String pkg = wi.provider.getPackageName();
-            if (!appNames.containsKey(pkg)) appNames.put(pkg, appLabel(wi));
-        }
-        list.sort((a, b) -> collator.compare(appNames.get(a.provider.getPackageName()),
-                appNames.get(b.provider.getPackageName())));
+
+        claudeChips.removeAllViews();
         List<String> labels = new ArrayList<>();
-        List<AppWidgetProviderInfo> infos = new ArrayList<>();
-        for (AppWidgetProviderInfo wi : list) {
-            String widgetName = wi.loadLabel(act.getPackageManager());
-            labels.add(appNames.get(wi.provider.getPackageName()) + " — " + widgetName);
-            infos.add(wi);
+        List<Runnable> actions = new ArrayList<>();
+        for (Sc s : claude) { labels.add(s.label); actions.add(() -> startShortcut(s.info)); }
+        if (claude.isEmpty()) {
+            labels.add("Відкрити Claude");
+            actions.add(() -> sendToClaude(""));
         }
-        act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle("Віджет")
-                .setItems(labels.toArray(new String[0]), (d, which) -> addWidget(infos.get(which))));
+        for (int i = 0; i < labels.size(); i++) {
+            TextView chip = text(13, 0xFFFFFFFF, true);
+            chip.setText(labels.get(i));
+            chip.setGravity(Gravity.CENTER);
+            int hp = Math.round(12 * dp);
+            chip.setPadding(hp, 0, hp, 0);
+            GradientDrawable cb = new GradientDrawable();
+            cb.setCornerRadius(14 * dp);
+            cb.setColor(0x33000000);
+            chip.setBackground(cb);
+            final Runnable r = actions.get(i);
+            chip.setOnClickListener(v -> r.run());
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Math.round(32 * dp));
+            lp.rightMargin = Math.round(8 * dp);
+            claudeChips.addView(chip, lp);
+        }
     }
 
-    private String appLabel(AppWidgetProviderInfo wi) {
+    private void startShortcut(android.content.pm.ShortcutInfo si) {
+        closeAll();
         try {
-            return String.valueOf(act.getPackageManager().getApplicationLabel(
-                    act.getPackageManager().getApplicationInfo(wi.provider.getPackageName(), 0)));
-        } catch (Exception e) {
-            return wi.provider.getPackageName();
+            act.getSystemService(android.content.pm.LauncherApps.class)
+                    .startShortcut(si.getPackage(), si.getId(), null, null, si.getUserHandle());
+        } catch (RuntimeException e) {
+            Intent open = act.getPackageManager().getLaunchIntentForPackage(si.getPackage());
+            if (open != null) act.startFirst(open);
         }
     }
-
-    private void addWidget(AppWidgetProviderInfo wi) {
-        int id = host.allocateAppWidgetId();
-        if (awm.bindAppWidgetIdIfAllowed(id, wi.provider)) {
-            configureOrAdd(id, wi);
-        } else {
-            pendingWidgetId = id;
-            pendingInfo = wi;
-            expectingResult = true;
-            Intent bind = new Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
-                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, wi.provider);
-            try {
-                act.startActivityForResult(bind, REQ_BIND);
-            } catch (RuntimeException e) {
-                expectingResult = false;
-                host.deleteAppWidgetId(id);
-            }
-        }
-    }
-
-    private void configureOrAdd(int id, AppWidgetProviderInfo wi) {
-        if (wi.configure != null) {
-            pendingWidgetId = id;
-            pendingInfo = wi;
-            expectingResult = true;
-            try {
-                host.startAppWidgetConfigureActivityForResult(act, id, 0, REQ_CONFIG, null);
-                return;
-            } catch (RuntimeException e) {
-                expectingResult = false;  // configuration screen unavailable: add as is
-            }
-        }
-        List<Integer> ids = savedWidgetIds();
-        ids.add(id);
-        saveWidgetIds(ids);
-        rebuildWidgets();
-        widgets.setLevel(2);
-    }
-
-    void onActivityResult(int request, int result, Intent data) {
-        expectingResult = false;
-        int id = pendingWidgetId;
-        AppWidgetProviderInfo wi = pendingInfo;
-        pendingWidgetId = -1;
-        pendingInfo = null;
-        if (id < 0) return;
-        if (result != android.app.Activity.RESULT_OK) {
-            try { host.deleteAppWidgetId(id); } catch (RuntimeException ignored) { }
-            return;
-        }
-        if (request == REQ_BIND && wi != null) {
-            configureOrAdd(id, wi);
-        } else if (request == REQ_CONFIG) {
-            List<Integer> ids = savedWidgetIds();
-            ids.add(id);
-            saveWidgetIds(ids);
-            rebuildWidgets();
-            widgets.setLevel(2);
-        }
-    }
-
-    static Bundle none() { return new Bundle(); }
 }
