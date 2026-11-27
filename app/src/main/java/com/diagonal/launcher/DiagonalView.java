@@ -424,6 +424,21 @@ public class DiagonalView extends View {
         invalidate();
     }
 
+    private final float[] rowRange = new float[2];
+
+    /**
+     * Visible stretch (in the rotated reading frame, x from left to right) of the row that sits
+     * `offset` px across the tablet from its centre line. Rows near the tablet's top and bottom
+     * edges see a different part of the screen than the centre line, so each row gets its own.
+     */
+    private float[] rowRange(float s, float mid, float offset) {
+        visibleT(s + offset);
+        float tA = tRange[0] + capMargin, tB = tRange[1] - capMargin;
+        rowRange[0] = s + mid - tB;
+        rowRange[1] = s + mid - tA;
+        return rowRange;
+    }
+
     private int currentInfoColor() {
         return infoFade >= 1f ? infoColorTo : (int) argb.evaluate(infoFade, infoColorFrom, infoColorTo);
     }
@@ -535,7 +550,8 @@ public class DiagonalView extends View {
         timePaint.setTypeface(infoTitlePaint.getTypeface());
         String now = nowClock();
         float nowW = timePaint.measureText(now);
-        canvas.drawText(now, right - gap - nowW, mid - band / 2f + 26 * dp, timePaint);
+        float topRight = rowRange(s, mid, -band / 2f + 20 * dp)[1];
+        canvas.drawText(now, Math.min(right, topRight) - gap - nowW, mid - band / 2f + 26 * dp, timePaint);
 
         // progress along the bottom edge, time above its start
         if (mDur > 0) {
@@ -543,7 +559,9 @@ public class DiagonalView extends View {
             if (c.playing && mUpd > 0) pos += (long) ((android.os.SystemClock.elapsedRealtime() - mUpd) * mSpeed);
             pos = Math.max(0, Math.min(mDur, pos));
             float by = mid + band / 2f - 14 * dp;
-            float bl = left + gap, br = right - gap;
+            float[] rr = rowRange(s, mid, band / 2f - 14 * dp);
+            float bl = Math.max(left, rr[0]) + gap, br = Math.min(right, rr[1]) - gap;
+            if (br - bl < 60 * dp) return;
             barPaint.setStrokeWidth(3 * dp);
             barPaint.setStrokeCap(Paint.Cap.ROUND);
             barPaint.setColor(c.text);
@@ -591,8 +609,8 @@ public class DiagonalView extends View {
     private void drawStatus(Canvas canvas, float s, float tMin, float tMax) {
         if (alert == 0 && battery < 0) return;
         float len = tMax - tMin, mid = (tMin + tMax) / 2f;
-        float x = s - len / 2f + 10 * dp;
         float cy = mid - band / 2f + 22 * dp;
+        float x = Math.max(s - len / 2f, rowRange(s, mid, cy - mid)[0]) + 10 * dp;
         int ink = infoNow.text;
         if (alert != 0) {
             float r = 10 * dp;

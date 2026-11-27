@@ -212,6 +212,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         panels.closeAll();
         recenterOnNextLoad = true;
         tabletPage = 0;
+        currentPageId = null;
         diagonal.jumpToCenter();
         maybeSnapshotLockScreen();
     }
@@ -292,7 +293,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             if (!info.openNotification()) { AppEntry a = appFor(pkg); if (a != null) launch(a); }
             return;
         }
-        if (info.media != null) {   // tap on the title: open the music app
+        if (false && info.media != null) {   // (players are their own pages now)
             InfoHub.Media mm = info.media;
             boolean opened = false;
             try {
@@ -316,14 +317,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private final Map<Bitmap, Integer> artColors = new HashMap<>();
     private final Map<Bitmap, Bitmap> artSmall = new HashMap<>();
 
-    /** Pages after the main one: InfoHub.Media (other players) or NotifList.Item (notifications). */
-    private List<Object> extraPages() {
+    /** Marker for the clock page of the tablet. */
+    private static final Object CLOCK = new Object();
+
+    /**
+     * Tablet pages: players first (the one playing leads), then the clock, then notifications.
+     * Without music the clock is the first page. Swiping along the tablet moves between them.
+     */
+    private List<Object> tabletPages() {
         List<Object> out = new ArrayList<>();
-        InfoHub.Media main0 = info.media != null && (!info.media.stale || forcePlayer) ? info.media : null;
-        for (InfoHub.Media m : info.allMedia) {
-            if (main0 != null && m.controller == main0.controller) continue;
-            out.add(m);
+        if (info.media != null) {
+            out.add(info.media);
+            for (InfoHub.Media m : info.allMedia) if (m.controller != info.media.controller) out.add(m);
         }
+        out.add(CLOCK);
         NotifService svc = NotifService.instance;
         if (svc != null) {
             android.service.notification.StatusBarNotification[] all = null;
@@ -356,10 +363,12 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     }
 
     private Object currentPage;
+    private Object currentPageId;   // keeps the same page when the list changes around it
 
     @Override
     public void onTabletSwipe(int direction) {
         tabletPage = Math.max(0, tabletPage + direction);
+        currentPageId = null;
         updateInfoStripe();
     }
 
@@ -382,59 +391,56 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         return 0xFF26262E;
     }
 
+    private static Object pageId(Object p) {
+        if (p instanceof InfoHub.Media) return ((InfoHub.Media) p).pkg;
+        if (p instanceof NotifList.Item) return ((NotifList.Item) p).key;
+        return p;
+    }
+
+    private boolean hadPlaying;
+
     private void updateInfoStripe() {
-        List<Object> extra = extraPages();
-        tabletPage = Math.min(tabletPage, extra.size());
-        diagonal.setPager(extra.size() + 1, tabletPage);
-        currentPage = tabletPage == 0 ? null : extra.get(tabletPage - 1);
-        if (currentPage != null) {
-            showPage(currentPage);
-            updateStatus();
-            panels.updateCards();
-            if (panels.quick.level() == 2) panels.refreshNotifications();
-            maybeShowBanner();
-            return;
+        List<Object> pages = tabletPages();
+        boolean playing = info.media != null && info.media.playing;
+        if (playing && !hadPlaying) { tabletPage = 0; currentPageId = null; }   // music started: show the player
+        hadPlaying = playing;
+        // stay on the same thing if pages were added/removed before it
+        if (currentPageId != null) {
+            for (int i = 0; i < pages.size(); i++) {
+                if (currentPageId.equals(pageId(pages.get(i)))) { tabletPage = i; break; }
+            }
         }
-        InfoHub.Media m = info.media;
-        InfoHub.Notif n = info.notif;
+        tabletPage = Math.min(tabletPage, pages.size() - 1);
+        currentPage = pages.get(tabletPage);
+        currentPageId = pageId(currentPage);
+        diagonal.setPager(pages.size(), tabletPage);
+
         String notifLine = null;
+        InfoHub.Notif n = info.notif;
         if (n != null) {
             AppEntry app = appFor(n.pkg);
             String from = app != null ? app.label : "";
             String who = n.title.isEmpty() ? from : (from.isEmpty() ? n.title : from + " · " + n.title);
             notifLine = "● " + who + (n.text.isEmpty() ? "" : ": " + n.text);
         }
-        if (m != null && m.art != lastArt) {
-            // new track art: scale + colour off the main thread, then redraw
-            final Bitmap art = m.art;
-            lastArt = art;
-            if (art == null) { lastArtScaled = null; lastArtColor = 0xFF26262E; }
-            else worker.execute(() -> {
-                Bitmap scaled = Bitmap.createScaledBitmap(art, 96, 96, true);
-                int col = ColorExtractor.analyze(scaled).color;
-                main.post(() -> {
-                    if (lastArt != art) return;
-                    lastArtScaled = scaled;
-                    lastArtColor = col;
-                    updateInfoStripe();
-                });
-            });
-        }
-        if (m == null || m.playing) forcePlayer = false;
-        if (m != null && (!m.stale || forcePlayer)) {
-            int c = lastArtColor;
-            // player: a new message only replaces the artist line for a moment; the colour stays
-            diagonal.setInfo(m.title, notifLine != null ? notifLine : m.artist, lastArtScaled, c,
-                    ColorExtractor.textColorFor(c), true, m.playing);
-            diagonal.setMusicPosition(m.position, m.updateTime, m.speed, m.duration);
-        } else if (m != null && notifLine == null) {
-            // paused for a long time: back to the clock, with the cover + ▶ in the corner
-            String sub = info.date();
-            if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
-            Bitmap mini = lastArtScaled != null ? lastArtScaled : placeholderArt();
-            diagonal.setInfo(info.time(), sub, null, 0xFF16161C, 0xFFFFFFFF, false, false, mini);
+
+        if (currentPage instanceof InfoHub.Media) {
+            InfoHub.Media pm = (InfoHub.Media) currentPage;
+            int c = artColor(pm.art);
+            Bitmap small = pm.art != null ? artSmall.get(pm.art) : null;
+            // a new message only replaces the artist line for a moment; the colour stays
+            diagonal.setInfo(pm.title, notifLine != null ? notifLine : pm.artist, small, c,
+                    ColorExtractor.textColorFor(c), true, pm.playing);
+            diagonal.setMusicPosition(pm.position, pm.updateTime, pm.speed, pm.duration);
+        } else if (currentPage instanceof NotifList.Item) {
+            NotifList.Item it = (NotifList.Item) currentPage;
+            AppEntry app = appFor(it.pkg);
+            int c = app != null ? app.color : 0xFF26262E;
+            String title = it.title.isEmpty() ? (app != null ? app.label : "") : it.title;
+            String sub = (app != null ? app.label + " · " : "") + it.text;
+            diagonal.setInfo(title, sub, it.large, c, ColorExtractor.textColorFor(c));
         } else if (notifLine != null) {
-            // clock stays; for a few seconds the stripe takes the app's colour and shows the message
+            // clock stays; for a few seconds the tablet takes the app's colour and shows the message
             AppEntry na = appFor(n.pkg);
             int c = na != null ? na.color : 0xFF16161C;
             diagonal.setInfo(info.time(), notifLine, null, c, ColorExtractor.textColorFor(c));
@@ -447,24 +453,6 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         panels.updateCards();
         if (panels.quick.level() == 2) panels.refreshNotifications();
         maybeShowBanner();
-    }
-
-    /** A player or a notification shown on its own tablet page. */
-    private void showPage(Object page) {
-        if (page instanceof InfoHub.Media) {
-            InfoHub.Media pm = (InfoHub.Media) page;
-            int c = artColor(pm.art);
-            Bitmap small = pm.art != null ? artSmall.get(pm.art) : null;
-            diagonal.setInfo(pm.title, pm.artist, small, c, ColorExtractor.textColorFor(c), true, pm.playing);
-            diagonal.setMusicPosition(pm.position, pm.updateTime, pm.speed, pm.duration);
-        } else {
-            NotifList.Item it = (NotifList.Item) page;
-            AppEntry app = appFor(it.pkg);
-            int c = app != null ? app.color : 0xFF26262E;
-            String title = it.title.isEmpty() ? (app != null ? app.label : "") : it.title;
-            String sub = (app != null ? app.label + " · " : "") + it.text;
-            diagonal.setInfo(title, sub, it.large, c, ColorExtractor.textColorFor(c));
-        }
     }
 
     private void updateStatus() {
@@ -482,7 +470,12 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         diagonal.setStatus(alert, pct, chg);
     }
 
-    int artColor() { return lastArtColor; }
+    int artColor() {
+        InfoHub.Media m = info.media;
+        if (m == null || m.art == null) return 0xFF26262E;
+        Integer c = artColors.get(m.art);
+        return c != null ? c : 0xFF26262E;
+    }
 
     private boolean forcePlayer;
     private Bitmap placeholder;
