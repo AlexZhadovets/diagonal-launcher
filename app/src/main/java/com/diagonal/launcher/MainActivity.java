@@ -2,6 +2,10 @@ package com.diagonal.launcher;
 
 import android.app.Activity;
 import android.app.ActivityOptions;
+import android.app.AlertDialog;
+import android.app.AppOpsManager;
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -13,6 +17,7 @@ import android.graphics.Canvas;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -23,23 +28,29 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
-import android.view.WindowInsets;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.text.Collator;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity implements DiagonalView.Listener {
 
+    private static final int HOME_SLOTS = DiagonalView.VISIBLE;
     private static final String PREFS = "diagonal";
-    private static final String KEY_ORDER = "order";
+    private static final String KEY_FAV = "favorites";
+    private static final String KEY_ASKED_USAGE = "asked_usage";
+    private static final String KEY_LAUNCH_PREFIX = "launch:";
+    private static final long USAGE_WINDOW_MS = 14L * 24 * 60 * 60 * 1000;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -50,6 +61,11 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private LauncherApps launcherApps;
     private SharedPreferences prefs;
     private int loadGeneration;
+    private boolean recenterOnNextLoad = true;
+
+    /** Last loaded data, kept so pin/unpin can re-arrange without reloading icons. */
+    private List<AppEntry> allApps = new ArrayList<>();
+    private Map<String, Long> usage = new HashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -64,6 +80,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         diagonal = new DiagonalView(this);
         diagonal.setListener(this);
         diagonal.setEmptyText(getString(R.string.loading));
+        diagonal.setSectionLabels(getString(R.string.section_usage), getString(R.string.section_alpha));
         root.addView(diagonal, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
@@ -73,11 +90,11 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         backButton.setTextColor(0xFFFFFFFF);
         backButton.setGravity(Gravity.CENTER);
         backButton.setContentDescription(getString(R.string.back_to_default));
-        GradientDrawable circle = new GradientDrawable();
-        circle.setShape(GradientDrawable.RECTANGLE); // square, no rounding
-        circle.setColor(0xE6202028);
-        circle.setStroke(Math.round(1.5f * dp), 0x66FFFFFF);
-        backButton.setBackground(circle);
+        GradientDrawable square = new GradientDrawable();
+        square.setShape(GradientDrawable.RECTANGLE); // no rounding
+        square.setColor(0xE6202028);
+        square.setStroke(Math.round(1.5f * dp), 0x66FFFFFF);
+        backButton.setBackground(square);
         backButton.setElevation(6 * dp);
         backButton.setOnClickListener(v -> openDefaultLauncherSettings());
         int size = Math.round(64 * dp);
@@ -88,8 +105,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) backButton.getLayoutParams();
-            p.bottomMargin = margin + insets.getSystemWindowInsetBottom();
             boolean rtl = v.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
+            p.bottomMargin = margin + insets.getSystemWindowInsetBottom();
             p.setMarginEnd(margin + (rtl ? insets.getSystemWindowInsetLeft() : insets.getSystemWindowInsetRight()));
             backButton.setLayoutParams(p);
             return insets;
@@ -98,7 +115,13 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         setContentView(root);
         getWindow().setBackgroundDrawable(null); // the view paints the background; avoid overdraw
         launcherApps.registerCallback(appsCallback, main);
-        loadApps();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        loadApps();                    // usage times change while other apps run
+        maybeAskForUsageAccess();
     }
 
     @Override
@@ -112,18 +135,17 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        // Pressing Home while already on the launcher jumps back to the first apps.
-        boolean alreadyOnHome = hasWindowFocus()
-                && (intent.getFlags() & Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT) == 0;
-        if (alreadyOnHome && Intent.ACTION_MAIN.equals(intent.getAction()) && diagonal != null) {
-            diagonal.scrollToStart();
+        // Every Home press brings back the 5 home apps in the middle.
+        if (Intent.ACTION_MAIN.equals(intent.getAction()) && diagonal != null) {
+            if (hasWindowFocus()) diagonal.animateToCenter();
+            else recenterOnNextLoad = true;
         }
     }
 
     @SuppressWarnings("deprecation")
     @Override
     public void onBackPressed() {
-        // A home screen has nowhere to go back to.
+        if (diagonal != null) diagonal.animateToCenter(); // Back = return to the middle
     }
 
     @SuppressWarnings("deprecation")
@@ -139,15 +161,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         }
     }
 
+    private AlertDialog.Builder dialog() {
+        return new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+    }
+
     // ---- "back to the normal desktop" button --------------------------
 
     private void openDefaultLauncherSettings() {
         Toast.makeText(this, R.string.hint_default, Toast.LENGTH_LONG).show();
-        Intent[] candidates = {
-                new Intent(Settings.ACTION_HOME_SETTINGS),
+        startFirst(new Intent(Settings.ACTION_HOME_SETTINGS),
                 new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
-                new Intent(Settings.ACTION_SETTINGS),
-        };
+                new Intent(Settings.ACTION_SETTINGS));
+    }
+
+    private void startFirst(Intent... candidates) {
         for (Intent i : candidates) {
             try {
                 startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -158,10 +185,63 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         }
     }
 
-    // ---- launching ------------------------------------------------------
+    // ---- usage access ---------------------------------------------------
+
+    @SuppressWarnings("deprecation")
+    private boolean hasUsageAccess() {
+        AppOpsManager ops = getSystemService(AppOpsManager.class);
+        int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                ? ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName())
+                : ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private void maybeAskForUsageAccess() {
+        if (prefs.getBoolean(KEY_ASKED_USAGE, false) || hasUsageAccess()) return;
+        prefs.edit().putBoolean(KEY_ASKED_USAGE, true).apply();
+        dialog().setTitle(R.string.usage_title)
+                .setMessage(R.string.usage_message)
+                .setPositiveButton(R.string.usage_allow, (d, w) -> openUsageSettings())
+                .setNegativeButton(R.string.later, null)
+                .show();
+    }
+
+    private void openUsageSettings() {
+        startFirst(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS,
+                        Uri.parse("package:" + getPackageName())),
+                new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+    }
+
+    /** Foreground time per package over the last two weeks, or our own launch counts. */
+    private Map<String, Long> readUsage() {
+        Map<String, Long> out = new HashMap<>();
+        if (hasUsageAccess()) {
+            try {
+                UsageStatsManager usm = getSystemService(UsageStatsManager.class);
+                long now = System.currentTimeMillis();
+                Map<String, UsageStats> stats = usm.queryAndAggregateUsageStats(now - USAGE_WINDOW_MS, now);
+                for (Map.Entry<String, UsageStats> e : stats.entrySet()) {
+                    out.put(e.getKey(), e.getValue().getTotalTimeInForeground());
+                }
+                if (!out.isEmpty()) return out;
+            } catch (RuntimeException ignored) {
+                // fall back to launch counts
+            }
+        }
+        for (Map.Entry<String, ?> e : prefs.getAll().entrySet()) {
+            if (e.getKey().startsWith(KEY_LAUNCH_PREFIX) && e.getValue() instanceof Integer) {
+                out.put(e.getKey().substring(KEY_LAUNCH_PREFIX.length()), (long) (Integer) e.getValue());
+            }
+        }
+        return out;
+    }
+
+    // ---- launching & long-press menu -----------------------------------
 
     @Override
     public void onLaunch(AppEntry app, View source, Rect bounds) {
+        String pkg = app.component.getPackageName();
+        prefs.edit().putInt(KEY_LAUNCH_PREFIX + pkg, prefs.getInt(KEY_LAUNCH_PREFIX + pkg, 0) + 1).apply();
         try {
             Bundle opts = ActivityOptions.makeScaleUpAnimation(source,
                     bounds.left, bounds.top, bounds.width(), bounds.height()).toBundle();
@@ -173,16 +253,115 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     }
 
     @Override
-    public void onReloadNeeded() { loadApps(); }
+    public void onLongPress(AppEntry app) {
+        String[] fav = readFavorites();
+        int current = -1;
+        for (int i = 0; i < HOME_SLOTS; i++) if (app.key.equals(fav[i])) current = i;
 
-    @Override
-    public void onOrderChanged(List<AppEntry> apps) {
-        StringBuilder sb = new StringBuilder();
-        for (AppEntry a : apps) {
-            if (sb.length() > 0) sb.append('\n');
-            sb.append(a.key);
+        List<String> labels = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        Map<String, AppEntry> byKey = new HashMap<>();
+        for (AppEntry a : allApps) byKey.put(a.key, a);
+
+        for (int slot = 0; slot < HOME_SLOTS; slot++) {
+            if (slot == current) continue;
+            AppEntry occupant = fav[slot].isEmpty() ? null : byKey.get(fav[slot]);
+            String who = occupant == null ? getString(R.string.slot_auto) : occupant.label;
+            labels.add(getString(R.string.pin_to_slot, slot + 1, who));
+            final int s = slot;
+            final int from = current;
+            actions.add(() -> pin(app, s, from));
         }
-        prefs.edit().putString(KEY_ORDER, sb.toString()).apply();
+        if (current >= 0) {
+            labels.add(getString(R.string.unpin));
+            final int from = current;
+            actions.add(() -> { String[] f = readFavorites(); f[from] = ""; saveFavorites(f); rearrange(false); });
+        }
+        labels.add(getString(R.string.app_info));
+        actions.add(() -> startFirst(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + app.component.getPackageName()))));
+        labels.add(getString(R.string.uninstall));
+        actions.add(() -> startFirst(new Intent(Intent.ACTION_DELETE,
+                Uri.parse("package:" + app.component.getPackageName()))));
+        if (!hasUsageAccess()) {
+            labels.add(getString(R.string.usage_allow));
+            actions.add(this::openUsageSettings);
+        }
+
+        dialog().setTitle(app.label)
+                .setItems(labels.toArray(new String[0]), (d, which) -> actions.get(which).run())
+                .show();
+    }
+
+    /** Puts app on a home slot; if it was already on another slot, the two swap places. */
+    private void pin(AppEntry app, int slot, int fromSlot) {
+        String[] f = readFavorites();
+        if (fromSlot >= 0) f[fromSlot] = f[slot];
+        f[slot] = app.key;
+        saveFavorites(f);
+        rearrange(false);
+    }
+
+    private String[] readFavorites() {
+        String[] out = new String[HOME_SLOTS];
+        String[] saved = prefs.getString(KEY_FAV, "").split("\n", -1);
+        for (int i = 0; i < HOME_SLOTS; i++) out[i] = i < saved.length ? saved[i] : "";
+        return out;
+    }
+
+    private void saveFavorites(String[] f) {
+        prefs.edit().putString(KEY_FAV, String.join("\n", f)).apply();
+    }
+
+    // ---- arranging ------------------------------------------------------
+
+    /** Builds  [usage, least → most] [5 home apps] [A → Z]  and hands it to the view. */
+    private void rearrange(boolean recenter) {
+        List<AppEntry> apps = allApps;
+        Map<String, Long> use = usage;
+        Collator collator = Collator.getInstance();
+
+        List<AppEntry> byUsage = new ArrayList<>(apps);
+        byUsage.sort((a, b) -> {
+            long ua = use.getOrDefault(a.component.getPackageName(), 0L);
+            long ub = use.getOrDefault(b.component.getPackageName(), 0L);
+            if (ua != ub) return Long.compare(ub, ua);
+            return collator.compare(a.label, b.label);
+        });
+
+        // Home slots: pinned apps, empty slots filled with the most-used apps.
+        Map<String, AppEntry> byKey = new HashMap<>();
+        for (AppEntry a : apps) byKey.put(a.key, a);
+        String[] saved = readFavorites();
+        AppEntry[] home = new AppEntry[HOME_SLOTS];
+        Set<String> taken = new HashSet<>();
+        for (int i = 0; i < HOME_SLOTS; i++) {
+            AppEntry a = saved[i].isEmpty() ? null : byKey.get(saved[i]);
+            if (a != null && taken.add(a.key)) home[i] = a;
+        }
+        int next = 0;
+        for (int i = 0; i < HOME_SLOTS; i++) {
+            if (home[i] != null) continue;
+            while (next < byUsage.size() && taken.contains(byUsage.get(next).key)) next++;
+            if (next < byUsage.size()) { home[i] = byUsage.get(next); taken.add(home[i].key); }
+        }
+        List<AppEntry> favs = new ArrayList<>();
+        for (AppEntry a : home) if (a != null) favs.add(a);
+
+        List<AppEntry> usageSide = new ArrayList<>();
+        for (AppEntry a : byUsage) if (!taken.contains(a.key)) usageSide.add(a);
+        Collections.reverse(usageSide);              // most used ends up next to the home apps
+
+        List<AppEntry> alphaSide = new ArrayList<>();
+        for (AppEntry a : apps) if (!taken.contains(a.key)) alphaSide.add(a);
+        alphaSide.sort((a, b) -> collator.compare(a.label, b.label));
+
+        List<AppEntry> all = new ArrayList<>(usageSide.size() + favs.size() + alphaSide.size());
+        all.addAll(usageSide);
+        all.addAll(favs);
+        all.addAll(alphaSide);
+        diagonal.setEmptyText(all.isEmpty() ? getString(R.string.no_apps) : "");
+        diagonal.setContent(all, usageSide.size(), favs.size(), recenter);
     }
 
     // ---- loading apps ---------------------------------------------------
@@ -201,22 +380,25 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     private void loadApps() {
         final int gen = ++loadGeneration;
-        final int iconPx = diagonal.iconSizePx();
-        final String savedOrder = prefs.getString(KEY_ORDER, "");
+        final int iconPx = Math.max(diagonal.iconSizePx(), 48);
         final Map<String, AppEntry> known = new HashMap<>(cache);
         worker.execute(() -> {
-            List<AppEntry> result = queryApps(iconPx, savedOrder, known);
+            List<AppEntry> result = queryApps(iconPx, known);
+            Map<String, Long> use = readUsage();
             main.post(() -> {
                 if (gen != loadGeneration || isDestroyed()) return;
                 cache.clear();
                 for (AppEntry a : result) cache.put(a.key, a);
-                diagonal.setEmptyText(result.isEmpty() ? getString(R.string.no_apps) : "");
-                diagonal.setApps(result);
+                allApps = result;
+                usage = use;
+                boolean recenter = recenterOnNextLoad;
+                recenterOnNextLoad = false;
+                rearrange(recenter);
             });
         });
     }
 
-    private List<AppEntry> queryApps(int iconPx, String savedOrder, Map<String, AppEntry> known) {
+    private List<AppEntry> queryApps(int iconPx, Map<String, AppEntry> known) {
         UserHandle user = Process.myUserHandle();
         List<LauncherActivityInfo> infos = launcherApps.getActivityList(null, user);
         List<AppEntry> list = new ArrayList<>(infos.size());
@@ -240,20 +422,6 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 // One broken app must never crash the home screen.
             }
         }
-
-        Map<String, Integer> pos = new HashMap<>();
-        if (!savedOrder.isEmpty()) {
-            String[] keys = savedOrder.split("\n");
-            for (int i = 0; i < keys.length; i++) pos.put(keys[i], i);
-        }
-        Collator collator = Collator.getInstance();
-        list.sort((a, b) -> {
-            Integer pa = pos.get(a.key), pb = pos.get(b.key);
-            if (pa != null && pb != null) return Integer.compare(pa, pb);
-            if (pa != null) return -1;   // remembered apps first, new ones at the end
-            if (pb != null) return 1;
-            return collator.compare(a.label, b.label);
-        });
         return list;
     }
 

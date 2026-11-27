@@ -18,149 +18,177 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Draws every app as a coloured diagonal stripe (bottom-left → top-right).
+ * Draws every app as a big square-ended diagonal stripe (bottom-left → top-right).
+ * About {@link #VISIBLE} stripes fit on the screen.
  *
- * Coordinates: s = (x + y) / √2 is the position across the stripes (the "scroll"
- * axis, running top-left → bottom-right); t = (y − x) / √2 is the position along a stripe.
- * Rotating the canvas by 45° turns these into plain local x (= s) and y (= t).
+ * Layout of the list (top-left → bottom-right):
+ *   [ by usage time, least used … most used ] [ 5 home apps ] [ alphabetical A … Z ]
+ * The screen opens centred on the 5 home apps; swiping up reveals A–Z, swiping down
+ * reveals the most-used apps.
+ *
+ * Coordinates: s = (x + y) / √2 runs across the stripes, t = (y − x) / √2 along a stripe.
+ * canvas.rotate(45) turns them into local x (= s) and y (= t).
  */
 public class DiagonalView extends View {
 
     public interface Listener {
         void onLaunch(AppEntry app, View source, Rect bounds);
-        void onOrderChanged(List<AppEntry> apps);
-        void onReloadNeeded();
+        void onLongPress(AppEntry app);
     }
+
+    public static final int VISIBLE = 5;
 
     private static final float INV_SQRT2 = 0.70710677f;
     private static final float SQRT2 = 1.4142135f;
     private static final int BG = 0xFF101014;
 
-    private final List<AppEntry> apps = new ArrayList<>();
+    private final List<AppEntry> items = new ArrayList<>();
+    private int centerIndex;
+    private int favStart, favEnd; // [favStart, favEnd)
+
     private final float dp;
-    private final float spacing;
-    private final float band;
-    private final float capMargin;
-    private final float iconSize;
-    private final float iconGap;
+    private float spacing, band, iconSize, iconGap, capMargin;
 
     private final Paint bandPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint outlinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final TextPaint textPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint hintPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint sectionPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private final RectF tmpRect = new RectF();
     private final RectF iconRect = new RectF();
+    private final float[] tRange = new float[2];
+    private float baselineOffset;
+    private float textSizeUsed = -1f;
 
     private final OverScroller scroller;
     private final GestureDetector gestures;
 
     private Listener listener;
     private String emptyText = "";
+    private String labelUsage = "", labelAlpha = "";
     private float scroll;
-
-    // Drag-to-reorder state.
-    private int dragIndex = -1;
-    private float dragS;
-    private float lastTouchS;
-    private boolean autoScrollPosted;
-    private int dragPointerId = -1;
-    private List<AppEntry> pendingApps;
+    private boolean pendingCenter = true;
     private boolean wasFlinging;
-    private final float baselineOffset;
-    private final Rect tapBounds = new Rect();
 
     public DiagonalView(Context context) {
         super(context);
         dp = getResources().getDisplayMetrics().density;
-        spacing = 168 * dp;
-        band = 148 * dp;
-        capMargin = 20 * dp;
-        iconSize = 72 * dp;
-        iconGap = 18 * dp;
 
         bandPaint.setStyle(Paint.Style.FILL);
-        outlinePaint.setStyle(Paint.Style.STROKE);
-        outlinePaint.setStrokeWidth(5 * dp);
-        outlinePaint.setColor(0xFFFFFFFF);
+        dividerPaint.setColor(0x55FFFFFF);
+        dividerPaint.setStrokeWidth(2 * dp);
 
-        textPaint.setTextSize(30 * dp);
         textPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         textPaint.setTextAlign(Paint.Align.LEFT);
-        Paint.FontMetrics fm = textPaint.getFontMetrics();
-        baselineOffset = -(fm.ascent + fm.descent) / 2f;
 
-        hintPaint.setTextSize(16 * dp);
+        hintPaint.setTextSize(18 * dp);
         hintPaint.setColor(0x99FFFFFF);
         hintPaint.setTextAlign(Paint.Align.CENTER);
 
+        sectionPaint.setTextSize(13 * dp);
+        sectionPaint.setColor(0x99FFFFFF);
+        sectionPaint.setTextAlign(Paint.Align.CENTER);
+        sectionPaint.setLetterSpacing(0.15f);
+
         scroller = new OverScroller(context);
         gestures = new GestureDetector(context, new Gestures());
-        gestures.setIsLongpressEnabled(true);
         setHapticFeedbackEnabled(true);
+        android.util.DisplayMetrics m = getResources().getDisplayMetrics();
+        computeSizes(m.widthPixels, m.heightPixels);
     }
 
     public void setListener(Listener l) { listener = l; }
 
     public void setEmptyText(String text) { emptyText = text; invalidate(); }
 
-    public void setApps(List<AppEntry> list) {
-        if (dragIndex >= 0) { pendingApps = new ArrayList<>(list); return; } // applied when the drag ends
-        apps.clear();
-        apps.addAll(list);
+    public void setSectionLabels(String usage, String alpha) { labelUsage = usage; labelAlpha = alpha; }
+
+    /**
+     * @param list     all stripes in display order
+     * @param favStart index of the first home app
+     * @param favCount number of home apps
+     * @param recenter jump to the home apps
+     */
+    public void setContent(List<AppEntry> list, int favStart, int favCount, boolean recenter) {
+        items.clear();
+        items.addAll(list);
+        this.favStart = favStart;
+        this.favEnd = favStart + favCount;
+        centerIndex = favCount > 0 ? favStart + favCount / 2 : Math.max(0, list.size() / 2);
+        if (recenter) jumpToCenter(); else clampScroll();
+        invalidate();
+    }
+
+    /** Size of the icon bitmaps to prepare. */
+    public int iconSizePx() { return Math.round(iconSize); }
+
+    public void jumpToCenter() {
+        scroller.forceFinished(true);
+        if (getWidth() == 0) { pendingCenter = true; return; }
+        scroll = centerScroll();
         clampScroll();
         invalidate();
     }
 
-    public int iconSizePx() { return Math.round(iconSize); }
-
-    public void scrollToStart() {
+    public void animateToCenter() {
         scroller.forceFinished(true);
-        scroller.startScroll(Math.round(scroll), 0, -Math.round(scroll), 0, 350);
+        int from = Math.round(scroll);
+        scroller.startScroll(from, 0, Math.round(centerScroll()) - from, 0, 350);
         postInvalidateOnAnimation();
     }
 
     // ---- geometry -------------------------------------------------------
 
-    private float startOffset() { return spacing; }
+    private void computeSizes(int w, int h) {
+        float S = (w + h) * INV_SQRT2;
+        spacing = S / VISIBLE;
+        band = spacing * 0.9f;
+        capMargin = 14 * dp;
+        iconSize = Math.min(band * 0.5f, 96 * dp);
+        iconGap = Math.max(12 * dp, band * 0.1f);
+        float ts = Math.max(18 * dp, Math.min(band * 0.19f, 34 * dp));
+        if (ts != textSizeUsed) {
+            textSizeUsed = ts;
+            textPaint.setTextSize(ts);
+            Paint.FontMetrics fm = textPaint.getFontMetrics();
+            baselineOffset = -(fm.ascent + fm.descent) / 2f;
+            for (AppEntry a : items) { a.labelWidth = -1f; a.ellBucket = -1; }
+        }
+    }
 
     private float screenS() { return (getWidth() + getHeight()) * INV_SQRT2; }
 
-    private float slotS(int i) { return startOffset() + i * spacing - scroll; }
+    private float slotS(int i) { return (i + 0.5f) * spacing - scroll; }
 
     private static float sOf(float x, float y) { return (x + y) * INV_SQRT2; }
 
-    private float maxScroll() {
-        if (apps.isEmpty()) return 0f;
-        float content = startOffset() * 2 + (apps.size() - 1) * spacing;
-        return Math.max(0f, content - screenS());
-    }
+    private float centerScroll() { return (centerIndex + 0.5f) * spacing - screenS() / 2f; }
+
+    private float minScroll() { return Math.min(0f, centerScroll()); }
+
+    private float maxScroll() { return Math.max(items.size() * spacing - screenS(), centerScroll()); }
 
     private void clampScroll() {
-        float max = maxScroll();
-        if (scroll < 0) scroll = 0;
+        float min = minScroll(), max = maxScroll();
+        if (scroll < min) scroll = min;
         if (scroll > max) scroll = max;
     }
 
-    /** Visible part of the stripe at position s: fills out[0]=tMin, out[1]=tMax. */
-    private void visibleT(float s, float[] out) {
+    /** Visible part of the stripe at position s: tRange[0]=tMin, tRange[1]=tMax. */
+    private void visibleT(float s) {
         float w = getWidth(), h = getHeight();
         float sc = Math.max(1f, Math.min(s, screenS() - 1f));
-        out[0] = Math.max(sc - SQRT2 * w, -sc);
-        out[1] = Math.min(sc, SQRT2 * h - sc);
+        tRange[0] = Math.max(sc - SQRT2 * w, -sc);
+        tRange[1] = Math.min(sc, SQRT2 * h - sc);
     }
 
-    private final float[] tRange = new float[2];
-
     private int indexAt(float x, float y) {
-        if (apps.isEmpty()) return -1;
+        if (items.isEmpty()) return -1;
         float s = sOf(x, y);
-        int i = Math.round((s + scroll - startOffset()) / spacing);
-        if (i < 0 || i >= apps.size()) return -1;
-        if (Math.abs(s - slotS(i)) > band / 2f + 2 * dp) return -1; // tap in the gap between stripes
-        float t = (y - x) * INV_SQRT2;
-        visibleT(slotS(i), tRange);
-        if (t < tRange[0] + capMargin - band / 2f || t > tRange[1] - capMargin + band / 2f) return -1;
+        int i = (int) Math.floor((s + scroll) / spacing);
+        if (i < 0 || i >= items.size()) return -1;
+        if (Math.abs(s - slotS(i)) > band / 2f + 2 * dp) return -1; // gap between stripes
         return i;
     }
 
@@ -169,46 +197,57 @@ public class DiagonalView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         canvas.drawColor(BG);
-        int n = apps.size();
+        int n = items.size();
         if (n == 0) {
             canvas.drawText(emptyText, getWidth() / 2f, getHeight() / 2f, hintPaint);
             return;
         }
         float S = screenS();
-        int first = Math.max(0, (int) Math.floor((scroll - startOffset() - band) / spacing));
-        int last = Math.min(n - 1, (int) Math.ceil((scroll + S - startOffset() + band) / spacing));
+        int first = Math.max(0, (int) Math.floor((scroll - band) / spacing));
+        int last = Math.min(n - 1, (int) Math.ceil((scroll + S + band) / spacing));
 
         canvas.save();
         canvas.rotate(45f);
-        for (int i = first; i <= last; i++) {
-            if (i == dragIndex) continue;
-            drawStripe(canvas, apps.get(i), slotS(i), false);
-        }
-        if (dragIndex >= 0 && dragIndex < n) {
-            drawStripe(canvas, apps.get(dragIndex), dragS, true);
+        for (int i = first; i <= last; i++) drawStripe(canvas, items.get(i), slotS(i));
+        // Thin dividers + captions between the three sections.
+        if (favEnd > favStart) {
+            if (favStart > 0) drawDivider(canvas, favStart * spacing - scroll, labelUsage, true);
+            if (favEnd < n) drawDivider(canvas, favEnd * spacing - scroll, labelAlpha, false);
         }
         canvas.restore();
     }
 
-    private void drawStripe(Canvas canvas, AppEntry app, float s, boolean lifted) {
-        visibleT(s, tRange);
+    private void drawDivider(Canvas canvas, float s, String caption, boolean before) {
+        if (s < 0 || s > screenS()) return;
+        visibleT(s);
+        canvas.drawLine(s, tRange[0], s, tRange[1], dividerPaint);
+        if (caption.isEmpty()) return;
+        float mid = (tRange[0] + tRange[1]) / 2f;
+        canvas.save();
+        canvas.rotate(-90f, s, mid);
+        // caption sits on the side of the section it names
+        float off = before ? -6 * dp : 6 * dp - sectionPaint.ascent();
+        canvas.drawText(caption, s, mid + off, sectionPaint);
+        canvas.restore();
+    }
+
+    private void drawStripe(Canvas canvas, AppEntry app, float s) {
+        visibleT(s);
         float tMin = tRange[0] + capMargin;
         float tMax = tRange[1] - capMargin;
-        float half = (lifted ? band * 1.06f : band) / 2f;
-        if (tMax - tMin < 2 * half) {               // stripe near a corner: keep a round dot
+        float half = band / 2f;
+        if (tMax - tMin < 2 * half) {               // near a corner: keep a small square
             float mid = (tRange[0] + tRange[1]) / 2f;
             tMin = mid - half;
             tMax = mid + half;
         }
         tmpRect.set(s - half, tMin, s + half, tMax);
         bandPaint.setColor(app.color);
-        canvas.drawRect(tmpRect, bandPaint);           // sharp, square ends
-        if (lifted) canvas.drawRect(tmpRect, outlinePaint);
+        canvas.drawRect(tmpRect, bandPaint);         // sharp, square ends
 
-        // Icon + label, reading bottom-left → top-right (local −t direction).
         float length = tMax - tMin;
-        float avail = length - 2 * iconGap - iconSize - iconGap;
         if (length < iconSize + 2 * iconGap) return;
+        float avail = length - 3 * iconGap - iconSize;
         float mid = (tMin + tMax) / 2f;
 
         textPaint.setColor(app.textColor);
@@ -234,13 +273,12 @@ public class DiagonalView extends View {
         float groupW = iconSize + (textW > 0 ? iconGap + textW : 0f);
 
         canvas.save();
-        canvas.rotate(-90f, s, mid);
+        canvas.rotate(-90f, s, mid);                 // text reads bottom-left → top-right
         float x0 = s - groupW / 2f;
         iconRect.set(x0, mid - iconSize / 2f, x0 + iconSize, mid + iconSize / 2f);
         if (app.icon != null) canvas.drawBitmap(app.icon, null, iconRect, iconPaint);
         if (textW > 0) {
-            float baseline = mid + baselineOffset;
-            canvas.drawText(label, 0, label.length(), x0 + iconSize + iconGap, baseline, textPaint);
+            canvas.drawText(label, 0, label.length(), x0 + iconSize + iconGap, mid + baselineOffset, textPaint);
         }
         canvas.restore();
     }
@@ -250,81 +288,8 @@ public class DiagonalView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         boolean handled = gestures.onTouchEvent(e);
-        int action = e.getActionMasked();
-        if (dragIndex >= 0) {
-            int pi = e.findPointerIndex(dragPointerId);
-            if (action == MotionEvent.ACTION_POINTER_UP && e.getPointerId(e.getActionIndex()) == dragPointerId) {
-                endDrag();
-            } else if (action == MotionEvent.ACTION_MOVE && pi >= 0) {
-                float s = sOf(e.getX(pi), e.getY(pi));
-                dragS += s - lastTouchS;
-                lastTouchS = s;
-                updateDragSlot();
-                ensureAutoScroll();
-                invalidate();
-            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                endDrag();
-            }
-            return true;
-        }
         return handled || super.onTouchEvent(e);
     }
-
-    private void updateDragSlot() {
-        int target = Math.round((dragS + scroll - startOffset()) / spacing);
-        target = Math.max(0, Math.min(apps.size() - 1, target));
-        if (target != dragIndex) {
-            AppEntry moved = apps.remove(dragIndex);
-            apps.add(target, moved);
-            dragIndex = target;
-            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
-        }
-    }
-
-    private void endDrag() {
-        dragIndex = -1;
-        autoScrollPosted = false;
-        removeCallbacks(autoScroll);
-        dragPointerId = -1;
-        if (listener != null) listener.onOrderChanged(new ArrayList<>(apps));
-        if (pendingApps != null) {      // an app was installed/removed during the drag
-            List<AppEntry> p = pendingApps;
-            pendingApps = null;
-            if (listener != null) listener.onReloadNeeded();
-            else setApps(p);
-        }
-        invalidate();
-    }
-
-    private void ensureAutoScroll() {
-        if (!autoScrollPosted) {
-            autoScrollPosted = true;
-            postOnAnimation(autoScroll);
-        }
-    }
-
-    private final Runnable autoScroll = new Runnable() {
-        @Override public void run() {
-            if (dragIndex < 0) { autoScrollPosted = false; return; }
-            float edge = spacing * 1.2f;
-            float S = screenS();
-            float speed = 0f;
-            if (lastTouchS < edge) speed = -(edge - lastTouchS) / edge * 18 * dp;
-            else if (lastTouchS > S - edge) speed = (lastTouchS - (S - edge)) / edge * 18 * dp;
-            if (speed != 0f) {
-                float before = scroll;
-                scroll += speed;
-                clampScroll();
-                if (scroll != before) {
-                    updateDragSlot();
-                    invalidate();
-                }
-                postOnAnimation(this);
-            } else {
-                autoScrollPosted = false;
-            }
-        }
-    };
 
     @Override
     public void computeScroll() {
@@ -338,6 +303,16 @@ public class DiagonalView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+        float oldSpacing = spacing;
+        float oldMiddle = scroll + (oldw + oldh) * INV_SQRT2 / 2f;
+        computeSizes(w, h);
+        if (pendingCenter || oldw == 0) {
+            pendingCenter = false;
+            scroll = centerScroll();
+        } else {
+            // keep the same stripe in the middle after rotation
+            scroll = oldMiddle / oldSpacing * spacing - screenS() / 2f;
+        }
         clampScroll();
     }
 
@@ -349,7 +324,6 @@ public class DiagonalView extends View {
         }
 
         @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
-            if (dragIndex >= 0) return true;
             scroll += (dx + dy) * INV_SQRT2;
             clampScroll();
             invalidate();
@@ -357,35 +331,29 @@ public class DiagonalView extends View {
         }
 
         @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
-            if (dragIndex >= 0) return true;
             int v = Math.round(-(vx + vy) * INV_SQRT2);
-            scroller.fling(Math.round(scroll), 0, v, 0, 0, Math.round(maxScroll()), 0, 0);
+            scroller.fling(Math.round(scroll), 0, v, 0,
+                    Math.round(minScroll()), Math.round(maxScroll()), 0, 0);
             postInvalidateOnAnimation();
             return true;
         }
 
         @Override public boolean onSingleTapUp(MotionEvent e) {
-            if (wasFlinging) return true;           // a tap during a fling only stops it
+            if (wasFlinging) return true;            // a tap during a fling only stops it
             int i = indexAt(e.getX(), e.getY());
             if (i < 0 || listener == null) return false;
             int r = Math.round(band / 2f);
-            tapBounds.set(Math.round(e.getX()) - r, Math.round(e.getY()) - r,
+            Rect bounds = new Rect(Math.round(e.getX()) - r, Math.round(e.getY()) - r,
                     Math.round(e.getX()) + r, Math.round(e.getY()) + r);
-            listener.onLaunch(apps.get(i), DiagonalView.this, new Rect(tapBounds));
+            listener.onLaunch(items.get(i), DiagonalView.this, bounds);
             return true;
         }
 
         @Override public void onLongPress(MotionEvent e) {
             int i = indexAt(e.getX(), e.getY());
-            if (i < 0) return;
-            scroller.forceFinished(true);
-            dragIndex = i;
-            dragPointerId = e.getPointerId(0);
-            dragS = slotS(i);
-            lastTouchS = sOf(e.getX(), e.getY());
+            if (i < 0 || listener == null) return;
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-            getParent().requestDisallowInterceptTouchEvent(true);
-            invalidate();
+            listener.onLongPress(items.get(i));
         }
     }
 }
