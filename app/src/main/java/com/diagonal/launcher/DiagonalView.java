@@ -73,18 +73,18 @@ public class DiagonalView extends View {
     public DiagonalView(Context context) {
         super(context);
         dp = getResources().getDisplayMetrics().density;
-        spacing = 84 * dp;
-        band = 58 * dp;
-        capMargin = 28 * dp;
-        iconSize = 34 * dp;
-        iconGap = 10 * dp;
+        spacing = 168 * dp;
+        band = 148 * dp;
+        capMargin = 20 * dp;
+        iconSize = 72 * dp;
+        iconGap = 18 * dp;
 
         bandPaint.setStyle(Paint.Style.FILL);
         outlinePaint.setStyle(Paint.Style.STROKE);
-        outlinePaint.setStrokeWidth(3 * dp);
+        outlinePaint.setStrokeWidth(5 * dp);
         outlinePaint.setColor(0xFFFFFFFF);
 
-        textPaint.setTextSize(17 * dp);
+        textPaint.setTextSize(30 * dp);
         textPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         textPaint.setTextAlign(Paint.Align.LEFT);
         Paint.FontMetrics fm = textPaint.getFontMetrics();
@@ -194,7 +194,7 @@ public class DiagonalView extends View {
         visibleT(s, tRange);
         float tMin = tRange[0] + capMargin;
         float tMax = tRange[1] - capMargin;
-        float half = (lifted ? band * 1.12f : band) / 2f;
+        float half = (lifted ? band * 1.06f : band) / 2f;
         if (tMax - tMin < 2 * half) {               // stripe near a corner: keep a round dot
             float mid = (tRange[0] + tRange[1]) / 2f;
             tMin = mid - half;
@@ -202,29 +202,29 @@ public class DiagonalView extends View {
         }
         tmpRect.set(s - half, tMin, s + half, tMax);
         bandPaint.setColor(app.color);
-        canvas.drawRoundRect(tmpRect, half, half, bandPaint);
-        if (lifted) canvas.drawRoundRect(tmpRect, half, half, outlinePaint);
+        canvas.drawRect(tmpRect, bandPaint);           // sharp, square ends
+        if (lifted) canvas.drawRect(tmpRect, outlinePaint);
 
         // Icon + label, reading bottom-left → top-right (local −t direction).
         float length = tMax - tMin;
-        float avail = length - 2 * half - iconSize - iconGap;
-        if (length < iconSize + 2 * half * 0.5f) return;
+        float avail = length - 2 * iconGap - iconSize - iconGap;
+        if (length < iconSize + 2 * iconGap) return;
         float mid = (tMin + tMax) / 2f;
 
         textPaint.setColor(app.textColor);
         if (app.labelWidth < 0) app.labelWidth = textPaint.measureText(app.label);
         CharSequence label;
         float textW;
-        if (avail <= 24 * dp) {
+        if (avail <= 40 * dp) {
             label = "";
             textW = 0f;
         } else if (app.labelWidth <= avail) {
             label = app.label;                       // common case: no allocation
             textW = app.labelWidth;
         } else {
-            int bucket = (int) (avail / (4 * dp));   // quantised so we re-ellipsize rarely
+            int bucket = (int) (avail / (6 * dp));   // quantised so we re-ellipsize rarely
             if (bucket != app.ellBucket) {
-                app.ellLabel = TextUtils.ellipsize(app.label, textPaint, bucket * 4 * dp, TextUtils.TruncateAt.END);
+                app.ellLabel = TextUtils.ellipsize(app.label, textPaint, bucket * 6 * dp, TextUtils.TruncateAt.END);
                 app.ellWidth = textPaint.measureText(app.ellLabel, 0, app.ellLabel.length());
                 app.ellBucket = bucket;
             }

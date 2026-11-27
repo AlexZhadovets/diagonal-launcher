@@ -69,18 +69,18 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
         backButton = new TextView(this);
         backButton.setText("↩");
-        backButton.setTextSize(24);
+        backButton.setTextSize(30);
         backButton.setTextColor(0xFFFFFFFF);
         backButton.setGravity(Gravity.CENTER);
         backButton.setContentDescription(getString(R.string.back_to_default));
         GradientDrawable circle = new GradientDrawable();
-        circle.setShape(GradientDrawable.OVAL);
+        circle.setShape(GradientDrawable.RECTANGLE); // square, no rounding
         circle.setColor(0xE6202028);
         circle.setStroke(Math.round(1.5f * dp), 0x66FFFFFF);
         backButton.setBackground(circle);
         backButton.setElevation(6 * dp);
         backButton.setOnClickListener(v -> openDefaultLauncherSettings());
-        int size = Math.round(56 * dp);
+        int size = Math.round(64 * dp);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(size, size, Gravity.BOTTOM | Gravity.END);
         int margin = Math.round(20 * dp);
         lp.setMargins(margin, margin, margin, margin);
