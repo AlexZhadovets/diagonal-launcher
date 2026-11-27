@@ -6,8 +6,8 @@
     <string name="loading">Завантаження…</string>
     <string name="cannot_open">Не вдалося відкрити програму</string>
     <string name="hint_default">Обери інший лаунчер у налаштуваннях «Головний екран»</string>
-    <string name="section_usage">ЧАСТО ↑</string>
-    <string name="section_alpha">А–Я ↓</string>
+    <string name="section_usage">ЗА ЧАСОМ ВИКОРИСТАННЯ ↑</string>
+    <string name="section_alpha">ЗА АЛФАВІТОМ ↓</string>
     <string name="usage_title">Сортування за часом використання</string>
     <string name="usage_message">Щоб показувати програми за тим, скільки часу ти в них проводиш, дозволь «Діагоналі» доступ до статистики використання. Без цього порядок рахується за кількістю запусків із цього робочого столу.</string>
     <string name="usage_allow">Дозволити доступ до статистики</string>
@@ -19,4 +19,5 @@
     <string name="uninstall">Видалити програму</string>
     <string name="search">Пошук</string>
     <string name="search_hint">Знайти програму</string>
+    <string name="to_home">На початок</string>
 </resources>

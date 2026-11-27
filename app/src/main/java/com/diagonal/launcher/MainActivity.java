@@ -67,6 +67,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private DiagonalView diagonal;
     private TextView backButton;
     private TextView searchButton;
+    private TextView homeButton;
     private FrameLayout searchLayer;
     private EditText searchField;
     private ResultsView searchResults;
@@ -115,6 +116,21 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         lp.setMargins(margin, margin, margin, margin);
         root.addView(backButton, lp);
 
+        // "Home" button: back to the 5 home apps (bottom-left, same subtle style).
+        homeButton = new TextView(this);
+        homeButton.setText("⌂");
+        homeButton.setTextSize(17);
+        homeButton.setTextColor(0x66FFFFFF);
+        homeButton.setGravity(Gravity.CENTER);
+        homeButton.setContentDescription(getString(R.string.to_home));
+        GradientDrawable homeBg = new GradientDrawable();
+        homeBg.setColor(0x22000000);
+        homeButton.setBackground(homeBg);
+        homeButton.setOnClickListener(v -> diagonal.animateToCenter());
+        FrameLayout.LayoutParams hp = new FrameLayout.LayoutParams(size, size, Gravity.BOTTOM | Gravity.START);
+        hp.setMargins(margin, margin, margin, margin);
+        root.addView(homeButton, hp);
+
         buildSearch(root, dp);
 
         root.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -131,12 +147,25 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             p.bottomMargin = margin + insets.getSystemWindowInsetBottom();
             p.setMarginEnd(margin + (rtl ? insets.getSystemWindowInsetLeft() : insets.getSystemWindowInsetRight()));
             backButton.setLayoutParams(p);
+            FrameLayout.LayoutParams hp2 = (FrameLayout.LayoutParams) homeButton.getLayoutParams();
+            hp2.bottomMargin = p.bottomMargin;
+            hp2.setMarginStart(margin + (rtl ? insets.getSystemWindowInsetRight() : insets.getSystemWindowInsetLeft()));
+            homeButton.setLayoutParams(hp2);
             return insets;
         });
 
         setContentView(root);
         getWindow().setBackgroundDrawable(null); // the view paints the background; avoid overdraw
         launcherApps.registerCallback(appsCallback, main);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Leaving for another app: be back at the start when the user returns.
+        closeSearch();
+        recenterOnNextLoad = true;
+        diagonal.jumpToCenter();
     }
 
     @Override
@@ -206,9 +235,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
         searchResults = new ResultsView(this);
         searchResults.setListener((app, v, b) -> {
-            if (app == null) { closeSearch(); return; }   // tap on empty space closes search
-            onLaunch(app, v, b);
             closeSearch();
+            if (app != null) diagonal.showApp(app.key);   // go to its place and blink it
         });
         FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);

@@ -52,6 +52,14 @@ public class DiagonalView extends View {
     private final Paint bandPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint dividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint seamPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint edgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint flashPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private float edgeWidth, sectionBaseline;
+    // One white blink on a stripe after jumping to it from search.
+    private String flashKey;
+    private long flashStart;
+    private static final long FLASH_MS = 650;
+    private static final int JUMP_MS = 450;
     private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final TextPaint textPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint hintPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
@@ -89,10 +97,16 @@ public class DiagonalView extends View {
         hintPaint.setColor(0x99FFFFFF);
         hintPaint.setTextAlign(Paint.Align.CENTER);
 
-        sectionPaint.setTextSize(13 * dp);
-        sectionPaint.setColor(0x99FFFFFF);
+        sectionPaint.setTextSize(12 * dp);
+        sectionPaint.setColor(0xCCFFFFFF);
         sectionPaint.setTextAlign(Paint.Align.CENTER);
-        sectionPaint.setLetterSpacing(0.15f);
+        sectionPaint.setLetterSpacing(0.2f);
+        sectionPaint.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD));
+        Paint.FontMetrics sfm = sectionPaint.getFontMetrics();
+        sectionBaseline = -(sfm.ascent + sfm.descent) / 2f;
+        edgeWidth = 22 * dp;
+        edgePaint.setColor(BG);
+        flashPaint.setColor(0xFFFFFFFF);
 
         scroller = new OverScroller(context);
         gestures = new GestureDetector(context, new Gestures());
@@ -132,6 +146,22 @@ public class DiagonalView extends View {
         scroll = centerScroll();
         clampScroll();
         invalidate();
+    }
+
+    /** Scrolls to the app (its A–Z place, or its home slot) and blinks it white once. */
+    public void showApp(String key) {
+        int idx = -1;
+        for (int i = favEnd; i < items.size(); i++) if (items.get(i).key.equals(key)) { idx = i; break; }
+        if (idx < 0) for (int i = 0; i < items.size(); i++) if (items.get(i).key.equals(key)) { idx = i; break; }
+        if (idx < 0) return;
+        float target = (idx + 0.5f) * spacing - screenS() / 2f;
+        target = Math.max(minScroll(), Math.min(maxScroll(), target));
+        scroller.forceFinished(true);
+        int from = Math.round(scroll);
+        scroller.startScroll(from, 0, Math.round(target) - from, 0, JUMP_MS);
+        flashKey = key;
+        flashStart = android.os.SystemClock.uptimeMillis() + JUMP_MS;
+        postInvalidateOnAnimation();
     }
 
     public void animateToCenter() {
@@ -211,7 +241,16 @@ public class DiagonalView extends View {
 
         canvas.save();
         canvas.rotate(45f);
-        for (int i = first; i <= last; i++) drawStripe(canvas, items.get(i), slotS(i));
+        for (int i = first; i <= last; i++) {
+            AppEntry a = items.get(i);
+            drawStripe(canvas, a, slotS(i));
+            if (a.key.equals(flashKey)) drawFlash(canvas, slotS(i));
+        }
+        if (flashKey != null) {
+            // stop blinking even if the stripe scrolled out of view
+            if (android.os.SystemClock.uptimeMillis() > flashStart + FLASH_MS) flashKey = null;
+            else postInvalidateOnAnimation();
+        }
         // Thin, slightly greyer seam where two neighbouring stripes have the same colour.
         float far = S * 2f, seam = 2.5f * dp;
         for (int i = first; i < last; i++) {
@@ -222,6 +261,36 @@ public class DiagonalView extends View {
             tmpRect.set(s - seam / 2f, -far, s + seam / 2f, far);
             canvas.drawRect(tmpRect, seamPaint);
         }
+        // Thick edges with captions where the sections meet.
+        if (favEnd > favStart) {
+            if (favStart > 0) drawEdge(canvas, favStart * spacing - scroll, labelUsage);
+            if (favEnd < n) drawEdge(canvas, favEnd * spacing - scroll, labelAlpha);
+        }
+        canvas.restore();
+    }
+
+    private void drawFlash(Canvas canvas, float s) {
+        long t = android.os.SystemClock.uptimeMillis() - flashStart;
+        if (t < 0) return;
+        if (t > FLASH_MS) { flashKey = null; return; }
+        float a = (float) Math.sin(Math.PI * t / FLASH_MS);
+        flashPaint.setAlpha(Math.round(220 * a));
+        float half = band / 2f, far = screenS() * 2f;
+        tmpRect.set(s - half, -far, s + half, far);
+        canvas.drawRect(tmpRect, flashPaint);
+    }
+
+    private void drawEdge(Canvas canvas, float s, String caption) {
+        if (s < -edgeWidth || s > screenS() + edgeWidth) return;
+        float far = screenS() * 2f;
+        tmpRect.set(s - edgeWidth / 2f, -far, s + edgeWidth / 2f, far);
+        canvas.drawRect(tmpRect, edgePaint);
+        if (caption.isEmpty()) return;
+        visibleT(s);
+        float mid = (tRange[0] + tRange[1]) / 2f;
+        canvas.save();
+        canvas.rotate(-90f, s, mid);
+        canvas.drawText(caption, s, mid + sectionBaseline, sectionPaint);
         canvas.restore();
     }
 
