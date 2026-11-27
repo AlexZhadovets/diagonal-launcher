@@ -126,7 +126,7 @@ public class QuickPanel extends View {
         rows.clear();
         rows.addAll(list);
         clearLabel = clearText;
-        if (level == 2) setLevel(2);   // resize for the new number of rows
+        if (level == 2 && Math.abs(bigLegs() - legs) > 1f && (anim == null || !anim.isRunning())) setLevel(2);
         invalidate();
     }
 

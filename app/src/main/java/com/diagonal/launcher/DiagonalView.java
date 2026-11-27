@@ -60,6 +60,7 @@ public class DiagonalView extends View {
     private float edgeWidth, sectionBaseline;
     // One white blink on a stripe after jumping to it from search.
     private String flashKey;
+    private int flashIndex = -1;
     private long flashStart;
     private static final long FLASH_MS = 650;
     private static final int JUMP_MS = 450;
@@ -215,6 +216,7 @@ public class DiagonalView extends View {
         int from = Math.round(scroll);
         scroller.startScroll(from, 0, Math.round(target) - from, 0, JUMP_MS);
         flashKey = key;
+        flashIndex = idx;
         flashStart = android.os.SystemClock.uptimeMillis() + JUMP_MS;
         postInvalidateOnAnimation();
     }
@@ -302,7 +304,7 @@ public class DiagonalView extends View {
             AppEntry a = items.get(i);
             if (a.info) drawInfoStripe(canvas, slotS(i));
             else drawStripe(canvas, a, slotS(i));
-            if (a.key.equals(flashKey)) drawFlash(canvas, slotS(i));
+            if (flashKey != null && i == flashIndex) drawFlash(canvas, slotS(i));
         }
         if (flashKey != null) {
             // stop blinking even if the stripe scrolled out of view

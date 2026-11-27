@@ -93,7 +93,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private List<AppEntry> allApps = new ArrayList<>();
     private Map<String, Long> usage = new HashMap<>();
     private AppEntry[] lastHome = new AppEntry[HOME_SLOTS];
-    private AlertDialog shownDialog;
+    private android.app.Dialog shownDialog;
     private InfoHub info;
     private Panels panels;
     private AppEntry infoEntry;
@@ -396,6 +396,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         main.removeCallbacks(reload);
         panels.onDestroy();
         info.destroy();
+        if (shownDialog != null) shownDialog.dismiss();
         worker.shutdownNow();
         super.onDestroy();
     }
@@ -710,7 +711,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             int[] palette = {0, 0xFFE53935, 0xFFFF7043, 0xFFFFC107, 0xFF43A047, 0xFF00ACC1, 0xFF1E88E5,
                     0xFF3949AB, 0xFF8E24AA, 0xFFD81B60, 0xFF6D4C41, 0xFF16161C, 0xFFF2F2F2};
             android.widget.GridLayout grid = new android.widget.GridLayout(this);
-            grid.setColumnCount(7);
+            int dialogW = Math.round(Math.min(getResources().getDisplayMetrics().widthPixels - 32 * dp, 420 * dp));
+            grid.setColumnCount(Math.max(4, Math.min(7, (dialogW - 2 * pad) / Math.round(42 * dp))));
             grid.setPadding(pad - Math.round(3 * dp), 0, pad, Math.round(6 * dp));
             int sw = Math.round(36 * dp);
             int saved = prefs.getInt(KEY_COLOR_PREFIX + app.key, 0);
@@ -718,7 +720,10 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 TextView swatch = menuText(c == 0 ? "A" : (c == saved ? "✓" : ""), 13,
                         c == 0 ? 0xFF111111 : ColorExtractor.textColorFor(c), true);
                 swatch.setGravity(Gravity.CENTER);
-                swatch.setBackgroundColor(c == 0 ? app.autoColor : c);
+                android.graphics.drawable.GradientDrawable sb = new android.graphics.drawable.GradientDrawable();
+                sb.setColor(c == 0 ? app.autoColor : c);
+                sb.setStroke(Math.round(dp), 0x55FFFFFF);
+                swatch.setBackground(sb);
                 if (c == 0) swatch.setTextColor(ColorExtractor.textColorFor(app.autoColor));
                 swatch.setOnClickListener(v -> {
                     dlg.dismiss();
@@ -754,6 +759,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             dlg.getWindow().setLayout(Math.round(Math.min(getResources().getDisplayMetrics().widthPixels - 32 * dp, 420 * dp)),
                     android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
         }
+        shownDialog = dlg;
         dlg.show();
     }
 

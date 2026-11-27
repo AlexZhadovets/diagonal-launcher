@@ -249,7 +249,7 @@ final class Panels {
         if (svc != null) {
             try { svc.cancelAllNotifications(); } catch (RuntimeException ignored) { }
         }
-        refreshNotifications();
+        quick.setNotifications(new ArrayList<>(), act.getString(R.string.clear_all));
     }
 
     // ---- quick settings -------------------------------------------------
@@ -542,7 +542,15 @@ final class Panels {
     private void register(String id, View card, int heightDp) {
         cardViews.put(id, card);
         cardHeights.put(id, heightDp);
-        card.setOnLongClickListener(v -> { cardMenu(id); return true; });
+        setLongPress(card, id);
+    }
+
+    private void setLongPress(View v, String id) {
+        v.setOnLongClickListener(x -> { cardMenu(id); return true; });
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int k = 0; k < g.getChildCount(); k++) setLongPress(g.getChildAt(k), id);
+        }
     }
 
     private String cardName(String id) {
@@ -586,6 +594,7 @@ final class Panels {
             add.setOnClickListener(v -> addCardDialog());
             addCard = add;
         }
+        refreshCalendar();
         if (cardOrder().size() < ALL_CARDS.length) {
             widgets.addView(addCard, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(52 * dp)));
         }
@@ -611,6 +620,10 @@ final class Panels {
         }
         labels.add(act.getString(R.string.card_remove));
         actions.add(() -> { order.remove(id); saveOrder(order); arrangeCards(); });
+        if (order.size() < ALL_CARDS.length) {
+            labels.add(act.getString(R.string.card_add).replace("+", "").trim());
+            actions.add(this::addCardDialog);
+        }
         act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle(cardName(id))
                 .setItems(labels.toArray(new String[0]), (d, w) -> actions.get(w).run()));
@@ -624,14 +637,14 @@ final class Panels {
         for (int k = 0; k < names.length; k++) names[k] = cardName(missing.get(k));
         act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle(act.getString(R.string.card_add))
-                .setItems(names, (d, w) -> { order.add(missing.get(w)); saveOrder(order); arrangeCards(); }));
+                .setItems(names, (d, w) -> { order.add(0, missing.get(w)); saveOrder(order); arrangeCards(); }));
     }
 
     // ---- extra cards ------------------------------------------------------
 
     private TextView weatherBig, weatherSmall, batteryBig, batterySmall, alarmBig, notesText;
     private LinearLayout calendarList;
-    private View batteryBar;
+    private View batteryBar, batteryRest;
 
     private LinearLayout simpleCard(int color, String caption) {
         int pad = Math.round(14 * dp);
@@ -664,8 +677,10 @@ final class Panels {
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 act.requestPermissions(new String[]{android.Manifest.permission.READ_CALENDAR}, MainActivity.REQ_CALENDAR);
             } else {
-                act.startFirst(new Intent(Intent.ACTION_VIEW, android.provider.CalendarContract.CONTENT_URI.buildUpon()
-                        .appendPath("time").build()));
+                android.net.Uri.Builder tb = android.provider.CalendarContract.CONTENT_URI.buildUpon().appendPath("time");
+                android.content.ContentUris.appendId(tb, System.currentTimeMillis());
+                act.startFirst(new Intent(Intent.ACTION_VIEW, tb.build()),
+                        Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALENDAR));
             }
         });
         register("calendar", cal, 150);
@@ -674,11 +689,13 @@ final class Panels {
         batteryBig = text(30, 0xFFFFFFFF, true);
         batterySmall = text(13, 0xCCFFFFFF, false);
         bat.addView(batteryBig);
-        FrameLayout track = new FrameLayout(act);
+        LinearLayout track = new LinearLayout(act);
         track.setBackgroundColor(0x33FFFFFF);
         batteryBar = new View(act);
         batteryBar.setBackgroundColor(0xFF4CD964);
-        track.addView(batteryBar, new FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
+        batteryRest = new View(act);
+        track.addView(batteryBar, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 50));
+        track.addView(batteryRest, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 50));
         LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(6 * dp));
         tl.topMargin = Math.round(4 * dp);
         bat.addView(track, tl);
@@ -724,25 +741,28 @@ final class Panels {
         String w = info.weather;
         int dot = w.indexOf(" · ");
         weatherBig.setText(w.isEmpty() ? "—" : (dot > 0 ? w.substring(0, dot) : w));
-        weatherSmall.setText(dot > 0 ? w.substring(dot + 3) : act.getString(R.string.weather_loading));
+        weatherSmall.setText(dot > 0 && dot + 3 < w.length() ? w.substring(dot + 3)
+                : w.isEmpty() ? act.getString(R.string.weather_loading) : "");
 
         Intent b = act.registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (b != null) {
             int level = b.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
             int scale = b.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100);
             int status = b.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
-            int pct = scale > 0 ? Math.round(level * 100f / scale) : 0;
+            int pct = scale > 0 ? Math.max(0, Math.min(100, Math.round(level * 100f / scale))) : 0;
             boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
                     || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
             batteryBig.setText(pct + "%");
             batterySmall.setText(act.getString(charging ? R.string.battery_charging : R.string.battery_on_battery));
             batteryBar.setBackgroundColor(pct <= 15 ? 0xFFFF453A : 0xFF4CD964);
-            View track = (View) batteryBar.getParent();
-            int tw = track.getWidth();
-            ViewGroup.LayoutParams lp = batteryBar.getLayoutParams();
-            lp.width = Math.round(tw * pct / 100f);
-            batteryBar.setLayoutParams(lp);
-            if (tw == 0) track.post(this::updateExtraCards);
+            LinearLayout.LayoutParams a = (LinearLayout.LayoutParams) batteryBar.getLayoutParams();
+            LinearLayout.LayoutParams r = (LinearLayout.LayoutParams) batteryRest.getLayoutParams();
+            if (a.weight != pct) {
+                a.weight = pct;
+                r.weight = 100 - pct;
+                batteryBar.setLayoutParams(a);
+                batteryRest.setLayoutParams(r);
+            }
         }
 
         try {
@@ -772,14 +792,16 @@ final class Panels {
             String[] proj = {android.provider.CalendarContract.Instances.TITLE,
                     android.provider.CalendarContract.Instances.BEGIN,
                     android.provider.CalendarContract.Instances.ALL_DAY};
-            try (android.database.Cursor c = act.getContentResolver().query(ub.build(), proj, null, null,
+            try (android.database.Cursor c = act.getContentResolver().query(ub.build(), proj,
+                    android.provider.CalendarContract.Instances.VISIBLE + "=1", null,
                     android.provider.CalendarContract.Instances.BEGIN + " ASC")) {
                 while (c != null && c.moveToNext() && events.size() < 3) {
                     String title = c.getString(0);
                     long begin = c.getLong(1);
                     boolean allDay = c.getInt(2) == 1;
-                    String when = new SimpleDateFormat(allDay ? "EEE d MMM" : "EEE HH:mm", Locale.getDefault())
-                            .format(new Date(begin));
+                    SimpleDateFormat f = new SimpleDateFormat(allDay ? "EEE d MMM" : "EEE HH:mm", Locale.getDefault());
+                    if (allDay) f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+                    String when = f.format(new Date(begin));
                     events.add(new String[]{when, title == null ? "" : title});
                 }
             } catch (RuntimeException ignored) { }
