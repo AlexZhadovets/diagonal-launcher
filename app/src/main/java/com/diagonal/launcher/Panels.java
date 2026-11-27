@@ -96,7 +96,11 @@ final class Panels {
 
         // ---- quick settings triangle ---------------------------------------
         quick = new QuickPanel(act);
-        quick.setListener(this::onTile);
+        quick.setListener(new QuickPanel.Listener() {
+            @Override public void onTile(QuickPanel.Tile t) { Panels.this.onTile(t); }
+            @Override public void onNotification(QuickPanel.Row r) { openRow(r); }
+            @Override public void onClearNotifications() { clearNotifications(); }
+        });
         root.addView(quick, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         buildTiles();
@@ -163,10 +167,11 @@ final class Panels {
         if (dir < 0) {
             if (widgets.level() > 0) { widgets.setLevel(widgets.level() - 1); return; }
             refreshTiles();
+            refreshNotifications();
             quick.setLevel(Math.min(2, quick.level() + 1));
         } else {
             if (quick.level() > 0) { quick.setLevel(quick.level() - 1); return; }
-            if (widgets.level() == 0) refreshShortcuts();
+            if (widgets.level() == 0) { refreshShortcuts(); refreshCalendar(); }
             widgets.setLevel(Math.min(2, widgets.level() + 1));
         }
     }
@@ -189,12 +194,73 @@ final class Panels {
         return !downInside; // touches outside never reach the stripes underneath
     }
 
+    // ---- notifications in the big triangle -------------------------------
+
+    void refreshNotifications() {
+        List<QuickPanel.Row> out = new ArrayList<>();
+        NotifService svc = NotifService.instance;
+        android.service.notification.StatusBarNotification[] all = null;
+        if (svc != null) {
+            try { all = svc.getActiveNotifications(); } catch (RuntimeException ignored) { }
+        }
+        if (all != null) {
+            List<android.service.notification.StatusBarNotification> list = new ArrayList<>();
+            for (android.service.notification.StatusBarNotification sbn : all) {
+                android.app.Notification n = sbn.getNotification();
+                if (n == null || sbn.isOngoing() || !sbn.isClearable()) continue;
+                if ((n.flags & android.app.Notification.FLAG_GROUP_SUMMARY) != 0) continue;
+                if (sbn.getPackageName().equals(act.getPackageName())) continue;
+                list.add(sbn);
+            }
+            list.sort((a, b) -> Long.compare(b.getPostTime(), a.getPostTime()));
+            for (android.service.notification.StatusBarNotification sbn : list) {
+                android.app.Notification n = sbn.getNotification();
+                CharSequence t = n.extras == null ? null : n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE);
+                CharSequence x = n.extras == null ? null : n.extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
+                if ((t == null || t.length() == 0) && (x == null || x.length() == 0)) continue;
+                AppEntry app = act.appFor(sbn.getPackageName());
+                QuickPanel.Row r = new QuickPanel.Row();
+                r.title = t == null ? (app != null ? app.label : "") : t.toString();
+                r.text = x == null ? "" : x.toString();
+                r.key = sbn.getKey();
+                r.intent = n.contentIntent;
+                r.autoCancel = (n.flags & android.app.Notification.FLAG_AUTO_CANCEL) != 0;
+                r.color = app != null ? app.color : 0xFF2A2A31;
+                r.ink = app != null ? app.textColor : 0xFFFFFFFF;
+                r.icon = app != null ? app.icon : null;
+                r.filter = app != null ? app.iconFilter() : null;
+                out.add(r);
+            }
+        }
+        quick.setNotifications(out, act.getString(R.string.clear_all));
+    }
+
+    private void openRow(QuickPanel.Row r) {
+        closeAll();
+        try { if (r.intent != null) InfoHub.sendAllowingStart(act, r.intent); } catch (Exception ignored) { }
+        NotifService svc = NotifService.instance;
+        if (r.autoCancel && svc != null) {
+            try { svc.cancelNotification(r.key); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    private void clearNotifications() {
+        NotifService svc = NotifService.instance;
+        if (svc != null) {
+            try { svc.cancelAllNotifications(); } catch (RuntimeException ignored) { }
+        }
+        refreshNotifications();
+    }
+
     // ---- quick settings -------------------------------------------------
 
     private void buildTiles() {
-        String[] names = {"Bluetooth", "Інтернет", "Гаманець", "Ліхтарик", "Wi-Fi", "Звук",
-                "Не турбувати", "Автоповорот", "NFC", "Точка доступу", "Геолокація", "Будильник",
-                "Політ", "Камера", "Шторка", "Diagonal"};
+        String[] names = {"Bluetooth", act.getString(R.string.tile_internet), act.getString(R.string.tile_wallet),
+                act.getString(R.string.tile_torch), "Wi-Fi", act.getString(R.string.tile_sound),
+                act.getString(R.string.tile_dnd), act.getString(R.string.tile_rotate), "NFC",
+                act.getString(R.string.tile_hotspot), act.getString(R.string.tile_location),
+                act.getString(R.string.tile_alarm), act.getString(R.string.tile_plane),
+                act.getString(R.string.tile_camera), act.getString(R.string.tile_shade), "Diagonal"};
         int[] icons = {Icons.BLUETOOTH, Icons.INTERNET, Icons.WALLET, Icons.TORCH, Icons.WIFI, Icons.SOUND,
                 Icons.DND, Icons.ROTATE, Icons.NFC, Icons.HOTSPOT, Icons.LOCATION, Icons.ALARM,
                 Icons.AIRPLANE, Icons.CAMERA, Icons.SHADE, Icons.SETTINGS};
@@ -244,8 +310,8 @@ final class Panels {
                     case T_ALARM: {
                         AlarmManager am = act.getSystemService(AlarmManager.class);
                         AlarmManager.AlarmClockInfo next = am.getNextAlarmClock();
-                        t.label = next == null ? "Будильник"
-                                : new SimpleDateFormat("EE HH:mm", new Locale("uk")).format(new Date(next.getTriggerTime()));
+                        t.label = next == null ? act.getString(R.string.tile_alarm)
+                                : new SimpleDateFormat("EE HH:mm", Locale.getDefault()).format(new Date(next.getTriggerTime()));
                         t.active = next != null;
                         break;
                     }
@@ -413,7 +479,8 @@ final class Panels {
                 try { InfoHub.sendAllowingStart(act, mm.controller.getSessionActivity()); } catch (Exception ignored) { }
             }
         });
-        widgets.addView(music, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(128 * dp)));
+        music.setClickable(true);
+        register("player", music, 128);
 
         // Chats: recent conversations (shortcuts published by messengers)
         LinearLayout chats = new LinearLayout(act);
@@ -422,7 +489,7 @@ final class Panels {
         chats.setBackground(cardBg(0xFF1E2433));
         chats.setClickable(true);
         TextView chatsTitle = text(12, 0x99FFFFFF, true);
-        chatsTitle.setText("ЧАТИ");
+        chatsTitle.setText(act.getString(R.string.chats_title));
         chatsTitle.setLetterSpacing(0.15f);
         chats.addView(chatsTitle);
         chatRow = new LinearLayout(act);
@@ -431,7 +498,7 @@ final class Panels {
         chatHint = text(13, 0xAAFFFFFF, false);
         chats.addView(chatRow);
         chats.addView(chatHint);
-        widgets.addView(chats, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(124 * dp)));
+        register("chats", chats, 124);
 
         // Claude: ask box + Claude's own shortcuts
         LinearLayout claude = new LinearLayout(act);
@@ -444,7 +511,7 @@ final class Panels {
         claudeTitle.setLetterSpacing(0.15f);
         claude.addView(claudeTitle);
         TextView ask = text(16, 0xFF5A2A1A, true);
-        ask.setText("Запитай Claude…");
+        ask.setText(act.getString(R.string.claude_ask));
         ask.setGravity(Gravity.CENTER_VERTICAL);
         ask.setPadding(pad, 0, pad, 0);
         GradientDrawable askBg = new GradientDrawable();
@@ -459,9 +526,287 @@ final class Panels {
         claudeChips.setOrientation(LinearLayout.HORIZONTAL);
         claudeChips.setPadding(0, Math.round(8 * dp), 0, 0);
         claude.addView(claudeChips);
-        widgets.addView(claude, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(140 * dp)));
+        register("claude", claude, 140);
 
+        buildExtraCards();
+        arrangeCards();
+    }
+
+    // ---- configurable card list -----------------------------------------
+
+    static final String KEY_CARDS = "cards";
+    static final String[] ALL_CARDS = {"player", "chats", "claude", "weather", "calendar", "battery", "alarm", "notes"};
+    private final java.util.Map<String, View> cardViews = new java.util.HashMap<>();
+    private final java.util.Map<String, Integer> cardHeights = new java.util.HashMap<>();
+
+    private void register(String id, View card, int heightDp) {
+        cardViews.put(id, card);
+        cardHeights.put(id, heightDp);
+        card.setOnLongClickListener(v -> { cardMenu(id); return true; });
+    }
+
+    private String cardName(String id) {
+        switch (id) {
+            case "player": return act.getString(R.string.card_player);
+            case "chats": return act.getString(R.string.card_chats);
+            case "claude": return "Claude";
+            case "weather": return act.getString(R.string.card_weather);
+            case "calendar": return act.getString(R.string.card_calendar);
+            case "battery": return act.getString(R.string.card_battery);
+            case "alarm": return act.getString(R.string.card_alarm);
+            default: return act.getString(R.string.card_notes);
+        }
+    }
+
+    /** Card ids in order from the corner (bottom) up. The bottom one also shows in the small window. */
+    private List<String> cardOrder() {
+        List<String> out = new ArrayList<>();
+        String saved = prefs.getString(KEY_CARDS, "player,chats,claude");
+        for (String id : saved.split(",")) if (cardViews.containsKey(id) && !out.contains(id)) out.add(id);
+        return out;
+    }
+
+    private void saveOrder(List<String> ids) { prefs.edit().putString(KEY_CARDS, TextUtils.join(",", ids)).apply(); }
+
+    private View addCard;
+
+    private void arrangeCards() {
+        widgets.removeAllViews();
+        for (String id : cardOrder()) {
+            View v = cardViews.get(id);
+            if (v.getParent() != null) ((ViewGroup) v.getParent()).removeView(v);
+            widgets.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    Math.round(cardHeights.get(id) * dp)));
+        }
+        if (addCard == null) {
+            TextView add = text(15, 0xCCFFFFFF, true);
+            add.setText(act.getString(R.string.card_add));
+            add.setGravity(Gravity.CENTER);
+            add.setBackground(cardBg(0xFF1E1E25));
+            add.setOnClickListener(v -> addCardDialog());
+            addCard = add;
+        }
+        if (cardOrder().size() < ALL_CARDS.length) {
+            widgets.addView(addCard, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(52 * dp)));
+        }
         updateCards();
+    }
+
+    private void cardMenu(String id) {
+        List<String> order = cardOrder();
+        int i = order.indexOf(id);
+        List<String> labels = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        if (i > 0) {
+            labels.add(act.getString(R.string.card_down));
+            actions.add(() -> { order.remove(i); order.add(i - 1, id); saveOrder(order); arrangeCards(); });
+        }
+        if (i >= 0 && i < order.size() - 1) {
+            labels.add(act.getString(R.string.card_up));
+            actions.add(() -> { order.remove(i); order.add(i + 1, id); saveOrder(order); arrangeCards(); });
+        }
+        if (i > 0) {
+            labels.add(act.getString(R.string.card_to_corner));
+            actions.add(() -> { order.remove(i); order.add(0, id); saveOrder(order); arrangeCards(); });
+        }
+        labels.add(act.getString(R.string.card_remove));
+        actions.add(() -> { order.remove(id); saveOrder(order); arrangeCards(); });
+        act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(cardName(id))
+                .setItems(labels.toArray(new String[0]), (d, w) -> actions.get(w).run()));
+    }
+
+    private void addCardDialog() {
+        List<String> order = cardOrder();
+        List<String> missing = new ArrayList<>();
+        for (String id : ALL_CARDS) if (!order.contains(id)) missing.add(id);
+        String[] names = new String[missing.size()];
+        for (int k = 0; k < names.length; k++) names[k] = cardName(missing.get(k));
+        act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(act.getString(R.string.card_add))
+                .setItems(names, (d, w) -> { order.add(missing.get(w)); saveOrder(order); arrangeCards(); }));
+    }
+
+    // ---- extra cards ------------------------------------------------------
+
+    private TextView weatherBig, weatherSmall, batteryBig, batterySmall, alarmBig, notesText;
+    private LinearLayout calendarList;
+    private View batteryBar;
+
+    private LinearLayout simpleCard(int color, String caption) {
+        int pad = Math.round(14 * dp);
+        LinearLayout c = new LinearLayout(act);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(pad, Math.round(10 * dp), pad, Math.round(10 * dp));
+        c.setBackground(cardBg(color));
+        c.setClickable(true);
+        TextView t = text(12, 0x99FFFFFF, true);
+        t.setText(caption.toUpperCase(Locale.getDefault()));
+        t.setLetterSpacing(0.15f);
+        c.addView(t);
+        return c;
+    }
+
+    private void buildExtraCards() {
+        LinearLayout weather = simpleCard(0xFF1B2A4A, act.getString(R.string.card_weather));
+        weatherBig = text(34, 0xFFFFFFFF, true);
+        weatherSmall = text(14, 0xCCFFFFFF, false);
+        weather.addView(weatherBig);
+        weather.addView(weatherSmall);
+        register("weather", weather, 116);
+
+        LinearLayout cal = simpleCard(0xFF2B1E3A, act.getString(R.string.card_calendar));
+        calendarList = new LinearLayout(act);
+        calendarList.setOrientation(LinearLayout.VERTICAL);
+        cal.addView(calendarList);
+        cal.setOnClickListener(v -> {
+            if (act.checkSelfPermission(android.Manifest.permission.READ_CALENDAR)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                act.requestPermissions(new String[]{android.Manifest.permission.READ_CALENDAR}, MainActivity.REQ_CALENDAR);
+            } else {
+                act.startFirst(new Intent(Intent.ACTION_VIEW, android.provider.CalendarContract.CONTENT_URI.buildUpon()
+                        .appendPath("time").build()));
+            }
+        });
+        register("calendar", cal, 150);
+
+        LinearLayout bat = simpleCard(0xFF1D2E22, act.getString(R.string.card_battery));
+        batteryBig = text(30, 0xFFFFFFFF, true);
+        batterySmall = text(13, 0xCCFFFFFF, false);
+        bat.addView(batteryBig);
+        FrameLayout track = new FrameLayout(act);
+        track.setBackgroundColor(0x33FFFFFF);
+        batteryBar = new View(act);
+        batteryBar.setBackgroundColor(0xFF4CD964);
+        track.addView(batteryBar, new FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(6 * dp));
+        tl.topMargin = Math.round(4 * dp);
+        bat.addView(track, tl);
+        bat.addView(batterySmall);
+        bat.setOnClickListener(v -> act.startFirst(new Intent(Intent.ACTION_POWER_USAGE_SUMMARY)));
+        register("battery", bat, 112);
+
+        LinearLayout alarm = simpleCard(0xFF33281A, act.getString(R.string.card_alarm));
+        alarmBig = text(30, 0xFFFFFFFF, true);
+        alarm.addView(alarmBig);
+        alarm.setOnClickListener(v -> act.startFirst(new Intent(AlarmClock.ACTION_SHOW_ALARMS)));
+        register("alarm", alarm, 96);
+
+        LinearLayout notes = simpleCard(0xFF3A3520, act.getString(R.string.card_notes));
+        notesText = text(15, 0xFFFFFFFF, false);
+        notesText.setSingleLine(false);
+        notesText.setMaxLines(3);
+        notes.addView(notesText);
+        notes.setOnClickListener(v -> editNote());
+        register("notes", notes, 124);
+    }
+
+    private void editNote() {
+        android.widget.EditText input = new android.widget.EditText(act);
+        input.setText(prefs.getString("note", ""));
+        input.setMinLines(3);
+        int p = Math.round(20 * dp);
+        FrameLayout box = new FrameLayout(act);
+        box.setPadding(p, Math.round(8 * dp), p, 0);
+        box.addView(input);
+        act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(act.getString(R.string.card_notes))
+                .setView(box)
+                .setPositiveButton(android.R.string.ok, (d, w) -> {
+                    prefs.edit().putString("note", input.getText().toString()).apply();
+                    updateCards();
+                })
+                .setNegativeButton(android.R.string.cancel, null));
+    }
+
+    private void updateExtraCards() {
+        if (weatherBig == null) return;
+        String w = info.weather;
+        int dot = w.indexOf(" · ");
+        weatherBig.setText(w.isEmpty() ? "—" : (dot > 0 ? w.substring(0, dot) : w));
+        weatherSmall.setText(dot > 0 ? w.substring(dot + 3) : act.getString(R.string.weather_loading));
+
+        Intent b = act.registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (b != null) {
+            int level = b.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = b.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100);
+            int status = b.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            int pct = scale > 0 ? Math.round(level * 100f / scale) : 0;
+            boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                    || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+            batteryBig.setText(pct + "%");
+            batterySmall.setText(act.getString(charging ? R.string.battery_charging : R.string.battery_on_battery));
+            batteryBar.setBackgroundColor(pct <= 15 ? 0xFFFF453A : 0xFF4CD964);
+            View track = (View) batteryBar.getParent();
+            int tw = track.getWidth();
+            ViewGroup.LayoutParams lp = batteryBar.getLayoutParams();
+            lp.width = Math.round(tw * pct / 100f);
+            batteryBar.setLayoutParams(lp);
+            if (tw == 0) track.post(this::updateExtraCards);
+        }
+
+        try {
+            AlarmManager am = act.getSystemService(AlarmManager.class);
+            AlarmManager.AlarmClockInfo next = am.getNextAlarmClock();
+            alarmBig.setText(next == null ? act.getString(R.string.alarm_none)
+                    : new SimpleDateFormat("EEE HH:mm", Locale.getDefault()).format(new Date(next.getTriggerTime())));
+        } catch (RuntimeException ignored) { }
+
+        String note = prefs.getString("note", "");
+        notesText.setText(note.isEmpty() ? act.getString(R.string.notes_hint) : note);
+        notesText.setTextColor(note.isEmpty() ? 0x88FFFFFF : 0xFFFFFFFF);
+    }
+
+    /** Next events for the calendar card (read on a worker thread). */
+    void refreshCalendar() {
+        if (calendarList == null || destroyed || shortcutWorker.isShutdown()) return;
+        boolean allowed = act.checkSelfPermission(android.Manifest.permission.READ_CALENDAR)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (!allowed) { showEvents(null); return; }
+        shortcutWorker.execute(() -> {
+            List<String[]> events = new ArrayList<>();
+            long now = System.currentTimeMillis();
+            android.net.Uri.Builder ub = android.provider.CalendarContract.Instances.CONTENT_URI.buildUpon();
+            android.content.ContentUris.appendId(ub, now);
+            android.content.ContentUris.appendId(ub, now + 7L * 24 * 3600 * 1000);
+            String[] proj = {android.provider.CalendarContract.Instances.TITLE,
+                    android.provider.CalendarContract.Instances.BEGIN,
+                    android.provider.CalendarContract.Instances.ALL_DAY};
+            try (android.database.Cursor c = act.getContentResolver().query(ub.build(), proj, null, null,
+                    android.provider.CalendarContract.Instances.BEGIN + " ASC")) {
+                while (c != null && c.moveToNext() && events.size() < 3) {
+                    String title = c.getString(0);
+                    long begin = c.getLong(1);
+                    boolean allDay = c.getInt(2) == 1;
+                    String when = new SimpleDateFormat(allDay ? "EEE d MMM" : "EEE HH:mm", Locale.getDefault())
+                            .format(new Date(begin));
+                    events.add(new String[]{when, title == null ? "" : title});
+                }
+            } catch (RuntimeException ignored) { }
+            act.runOnUiThread(() -> { if (!destroyed) showEvents(events); });
+        });
+    }
+
+    private void showEvents(List<String[]> events) {
+        calendarList.removeAllViews();
+        if (events == null) {
+            TextView t = text(14, 0xAAFFFFFF, false);
+            t.setText(act.getString(R.string.calendar_allow));
+            calendarList.addView(t);
+            return;
+        }
+        if (events.isEmpty()) {
+            TextView t = text(14, 0xAAFFFFFF, false);
+            t.setText(act.getString(R.string.calendar_empty));
+            calendarList.addView(t);
+            return;
+        }
+        for (String[] e : events) {
+            TextView t = text(15, 0xFFFFFFFF, false);
+            t.setText(e[0] + "   " + e[1]);
+            t.setPadding(0, Math.round(4 * dp), 0, 0);
+            calendarList.addView(t);
+        }
     }
 
     private TextView control(String label, View.OnClickListener l) {
@@ -476,14 +821,15 @@ final class Panels {
 
     void updateCards() {
         if (musicTitle == null) return;
+        updateExtraCards();
         InfoHub.Media m = info.media;
         if (!info.hasNotificationAccess()) {
-            musicTitle.setText("Музика");
-            musicArtist.setText("Дозволь доступ до сповіщень");
+            musicTitle.setText(act.getString(R.string.music));
+            musicArtist.setText(act.getString(R.string.music_need_access));
             musicArt.setImageBitmap(null);
             musicPlay.setText("▶");
         } else if (m == null) {
-            musicTitle.setText("Нічого не грає");
+            musicTitle.setText(act.getString(R.string.music_nothing));
             musicArtist.setText("");
             musicArt.setImageBitmap(null);
             musicPlay.setText("▶");
@@ -499,7 +845,7 @@ final class Panels {
 
     private void askClaude() {
         android.widget.EditText input = new android.widget.EditText(act);
-        input.setHint("Твоє питання");
+        input.setHint(act.getString(R.string.claude_question));
         input.setMinLines(2);
         int p = Math.round(20 * dp);
         FrameLayout box = new FrameLayout(act);
@@ -508,7 +854,7 @@ final class Panels {
         AlertDialog d = new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Claude")
                 .setView(box)
-                .setPositiveButton("Надіслати", (dlg, w) -> sendToClaude(input.getText().toString().trim()))
+                .setPositiveButton(act.getString(R.string.send), (dlg, w) -> sendToClaude(input.getText().toString().trim()))
                 .setNegativeButton(android.R.string.cancel, null)
                 .create();
         d.setOnShowListener(x -> {
@@ -637,8 +983,8 @@ final class Panels {
 
     private void showShortcuts(List<Sc> chats, List<Sc> claude, boolean allowed) {
         chatRow.removeAllViews();
-        if (!allowed) chatHint.setText("Зроби Diagonal головним екраном, щоб бачити чати");
-        else if (chats.isEmpty()) chatHint.setText("Месенджери ще не показали останні чати");
+        if (!allowed) chatHint.setText(act.getString(R.string.chats_need_home));
+        else if (chats.isEmpty()) chatHint.setText(act.getString(R.string.chats_empty));
         else chatHint.setText("");
         chatHint.setVisibility(chatHint.getText().length() == 0 ? View.GONE : View.VISIBLE);
         int cell = Math.round(62 * dp);
@@ -667,7 +1013,7 @@ final class Panels {
             actions.add(() -> startShortcut(s.info));
         }
         if (claude.isEmpty()) {
-            labels.add("Відкрити Claude");
+            labels.add(act.getString(R.string.claude_open));
             actions.add(() -> sendToClaude(""));
         }
         for (int i = 0; i < labels.size(); i++) {

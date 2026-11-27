@@ -25,6 +25,20 @@ public class QuickPanel extends View {
 
     public interface Listener {
         void onTile(Tile tile);
+        void onNotification(Row row);
+        void onClearNotifications();
+    }
+
+    /** One notification line in the big triangle. */
+    public static final class Row {
+        String title, text, key;
+        int color, ink;
+        android.graphics.Bitmap icon;
+        android.graphics.ColorFilter filter;
+        android.app.PendingIntent intent;
+        boolean autoCancel;
+        final android.graphics.RectF box = new android.graphics.RectF();
+        boolean shown;
     }
 
     public static final class Tile {
@@ -43,6 +57,14 @@ public class QuickPanel extends View {
     public static final int LEVEL1_TILES = 4;
 
     private final List<Tile> tiles = new ArrayList<>();
+    private final List<Row> rows = new ArrayList<>();
+    private final Row clearRow = new Row();
+    private final Paint rowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint rowTitle = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint rowText = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final android.graphics.RectF tmpIcon = new android.graphics.RectF();
+    private final Paint bmpPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private String clearLabel = "Clear all";
     private final List<float[]> cells = new ArrayList<>(); // cx, cy, d
     private final float dp;
     private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -68,9 +90,21 @@ public class QuickPanel extends View {
         label.setColor(0xDDFFFFFF);
         label.setTextSize(11 * dp);
         label.setTextAlign(Paint.Align.CENTER);
+        rowTitle.setTextSize(14 * dp);
+        rowTitle.setTypeface(android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.BOLD));
+        rowText.setTextSize(13 * dp);
         gestures = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent e) { return true; }
             @Override public boolean onSingleTapUp(MotionEvent e) {
+                if (level == 2 && listener != null) {
+                    for (Row r : rows) {
+                        if (r.shown && r.box.contains(e.getX(), e.getY())) { listener.onNotification(r); return true; }
+                    }
+                    if (clearRow.shown && clearRow.box.contains(e.getX(), e.getY())) {
+                        listener.onClearNotifications();
+                        return true;
+                    }
+                }
                 int i = tileAt(e.getX(), e.getY());
                 if (i >= 0 && listener != null) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
@@ -88,6 +122,14 @@ public class QuickPanel extends View {
 
     public void setTiles(List<Tile> list) { tiles.clear(); tiles.addAll(list); invalidate(); }
 
+    public void setNotifications(List<Row> list, String clearText) {
+        rows.clear();
+        rows.addAll(list);
+        clearLabel = clearText;
+        if (level == 2) setLevel(2);   // resize for the new number of rows
+        invalidate();
+    }
+
     public void setTopInset(float px) { topInset = px; layoutCells(); invalidate(); }
 
     public int level() { return level; }
@@ -97,7 +139,7 @@ public class QuickPanel extends View {
     public void setLevel(int newLevel) {
         level = Math.max(0, Math.min(2, newLevel));
         if (getWidth() == 0) { final int l = level; post(() -> setLevel(l)); return; }
-        float target = level == 0 ? 0f : legsFor(level == 1 ? LEVEL1_TILES : tiles.size());
+        float target = level == 0 ? 0f : level == 1 ? legsFor(LEVEL1_TILES) : bigLegs();
         if (level > 0) setVisibility(VISIBLE);
         if (anim != null) anim.cancel();
         anim = ValueAnimator.ofFloat(legs, target);
@@ -124,6 +166,8 @@ public class QuickPanel extends View {
         if (w == 0) return;
         cells.clear();
         cell = Math.min(w / 4.2f, 96 * dp);
+        ROW_H = 54 * dp;
+        ROW_GAP = 6 * dp;
         radius = cell * 0.30f;
         float pad = 6 * dp;
         int cols = (int) ((w - pad) / cell);
@@ -139,9 +183,27 @@ public class QuickPanel extends View {
         cells.sort((a, b) -> a[2] != b[2] ? Float.compare(a[2], b[2]) : Float.compare(a[3], b[3]));
         if (level > 0) {
             if (anim != null) anim.cancel();
-            legs = legsFor(level == 1 ? LEVEL1_TILES : tiles.size());
+            legs = level == 1 ? legsFor(LEVEL1_TILES) : bigLegs();
         }
     }
+
+    /** Big triangle: all tiles, plus room for notification rows under them. */
+    private float bigLegs() {
+        float tilesOnly = legsFor(tiles.size());
+        if (rows.isEmpty()) return tilesOnly;
+        float rowsNeed = tilesBottom() + (Math.min(rows.size(), 5) + 1) * (ROW_H + ROW_GAP) + 190 * dp;
+        return Math.max(tilesOnly, Math.min(rowsNeed, getWidth() + getHeight() * 0.8f));
+    }
+
+    private float tilesBottom() {
+        float bottom = topInset;
+        for (int i = 0; i < tiles.size() && i < cells.size(); i++) {
+            bottom = Math.max(bottom, cells.get(i)[1] + radius + 22 * dp);
+        }
+        return bottom;
+    }
+
+    private float ROW_H, ROW_GAP;
 
     private float legsFor(int count) {
         if (cells.isEmpty() || count == 0) return 0f;
@@ -182,6 +244,51 @@ public class QuickPanel extends View {
             Icons.draw(canvas, t.icon, c[0], c[1], radius * 1.1f, iconPaint);
             CharSequence l = TextUtils.ellipsize(t.label, label, cell - 4 * dp, TextUtils.TruncateAt.END);
             canvas.drawText(l, 0, l.length(), c[0], c[1] + radius + 14 * dp, label);
+        }
+        if (level != 1) drawRows(canvas, w);
+    }
+
+    /** Notification rows: right-aligned, each as wide as the triangle allows at its height. */
+    private void drawRows(Canvas canvas, int w) {
+        float pad = 10 * dp;
+        float y = tilesBottom() + 8 * dp;
+        int count = Math.min(rows.size(), 5);
+        for (int i = 0; i <= count; i++) {
+            Row r = i < count ? rows.get(i) : clearRow;
+            r.shown = false;
+            if (i == count && count == 0) break;
+            float bottom = y + (i < count ? ROW_H : ROW_H * 0.7f);
+            float width = Math.min(w - 2 * pad, legs - bottom - pad);
+            if (width < 170 * dp) break;
+            r.box.set(w - pad - width, y, w - pad, bottom);
+            r.shown = true;
+            if (i < count) {
+                rowPaint.setColor(r.color);
+                canvas.drawRect(r.box, rowPaint);
+                float is = ROW_H - 20 * dp;
+                float x = r.box.left + 10 * dp;
+                if (r.icon != null) {
+                    tmpIcon.set(x, r.box.centerY() - is / 2, x + is, r.box.centerY() + is / 2);
+                    bmpPaint.setColorFilter(r.filter);
+                    canvas.drawBitmap(r.icon, null, tmpIcon, bmpPaint);
+                    x += is + 10 * dp;
+                }
+                float avail = r.box.right - 10 * dp - x;
+                rowTitle.setColor(r.ink);
+                rowText.setColor(r.ink);
+                rowText.setAlpha(200);
+                CharSequence t1 = TextUtils.ellipsize(r.title, rowTitle, avail, TextUtils.TruncateAt.END);
+                CharSequence t2 = TextUtils.ellipsize(r.text, rowText, avail, TextUtils.TruncateAt.END);
+                canvas.drawText(t1, 0, t1.length(), x, r.box.top + 22 * dp, rowTitle);
+                canvas.drawText(t2, 0, t2.length(), x, r.box.top + 41 * dp, rowText);
+            } else {
+                rowPaint.setColor(0xFF2A2A31);
+                canvas.drawRect(r.box, rowPaint);
+                rowTitle.setColor(0xFFFFFFFF);
+                float tw = rowTitle.measureText(clearLabel);
+                canvas.drawText(clearLabel, r.box.centerX() - tw / 2, r.box.centerY() + 5 * dp, rowTitle);
+            }
+            y = bottom + ROW_GAP;
         }
     }
 

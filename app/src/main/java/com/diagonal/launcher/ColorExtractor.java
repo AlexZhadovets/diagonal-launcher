@@ -18,6 +18,7 @@ final class ColorExtractor {
         final int color;
         final int textColor;
         final Bitmap glyph;
+        boolean isGlyph;
 
         Result(int color, int textColor, Bitmap glyph) {
             this.color = color;
@@ -78,8 +79,10 @@ final class ColorExtractor {
         if (twoTone && bgLight) {
             // DeepSeek / YouTube style: stripe takes the logo colour, logo becomes a white glyph.
             int text = textColorFor(fgColor);
-            Bitmap glyph = makeGlyph(px, w, h, bg, text);
-            return new Result(fgColor, text, glyph != null ? glyph : bmp);
+            Bitmap glyph = makeGlyph(px, w, h, bg, 0xFFFFFFFF);   // white mask, tinted when drawn
+            Result r = new Result(fgColor, text, glyph != null ? glyph : bmp);
+            r.isGlyph = glyph != null;
+            return r;
         }
         // Old scheme: stripe = the icon's tile colour, icon drawn as is.
         return new Result(bg, textColorFor(bg), bmp);

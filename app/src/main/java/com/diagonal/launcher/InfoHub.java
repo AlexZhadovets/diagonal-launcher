@@ -140,7 +140,7 @@ final class InfoHub {
 
     String time() { return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date()); }
 
-    String date() { return new SimpleDateFormat("EEE, d MMM", new Locale("uk")).format(new Date()); }
+    String date() { return new SimpleDateFormat("EEE, d MMM", Locale.getDefault()).format(new Date()); }
 
     // ---- music ----------------------------------------------------------
 
@@ -374,18 +374,20 @@ final class InfoHub {
         return kyiv;
     }
 
-    private static String describe(int code) {
-        if (code == 0) return "Ясно";
-        if (code <= 2) return "Мінлива хмарність";
-        if (code == 3) return "Хмарно";
-        if (code == 45 || code == 48) return "Туман";
-        if (code >= 51 && code <= 57) return "Мряка";
-        if (code >= 61 && code <= 67) return "Дощ";
-        if (code >= 71 && code <= 77) return "Сніг";
-        if (code >= 80 && code <= 82) return "Злива";
-        if (code == 85 || code == 86) return "Снігопад";
-        if (code >= 95) return "Гроза";
-        return "";
+    private String describe(int code) {
+        int id;
+        if (code == 0) id = R.string.w_clear;
+        else if (code <= 2) id = R.string.w_partly;
+        else if (code == 3) id = R.string.w_cloudy;
+        else if (code == 45 || code == 48) id = R.string.w_fog;
+        else if (code >= 51 && code <= 57) id = R.string.w_drizzle;
+        else if (code >= 61 && code <= 67) id = R.string.w_rain;
+        else if (code >= 71 && code <= 77) id = R.string.w_snow;
+        else if (code >= 80 && code <= 82) id = R.string.w_showers;
+        else if (code == 85 || code == 86) id = R.string.w_snowfall;
+        else if (code >= 95) id = R.string.w_storm;
+        else return "";
+        return ctx.getString(id);
     }
 
     static List<String> nothing() { return new ArrayList<>(); }

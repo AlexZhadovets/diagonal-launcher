@@ -457,7 +457,11 @@ public class DiagonalView extends View {
         canvas.rotate(-90f, s, mid);                 // text reads bottom-left → top-right
         float x0 = s - groupW / 2f;
         iconRect.set(x0, mid - iconSize / 2f, x0 + iconSize, mid + iconSize / 2f);
-        if (app.icon != null) canvas.drawBitmap(app.icon, null, iconRect, iconPaint);
+        if (app.icon != null) {
+            iconPaint.setColorFilter(app.iconFilter());
+            canvas.drawBitmap(app.icon, null, iconRect, iconPaint);
+            iconPaint.setColorFilter(null);
+        }
         if (textW > 0) {
             canvas.drawText(label, 0, label.length(), x0 + iconSize + iconGap, mid + baselineOffset, textPaint);
         }

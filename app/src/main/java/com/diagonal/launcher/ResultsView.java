@@ -131,7 +131,9 @@ public class ResultsView extends View {
             iconRect.set(ix, cy - iconSize / 2f, ix + iconSize, cy + iconSize / 2f);
             if (a.icon != null) {
                 iconPaint.setAlpha(alpha);
+                iconPaint.setColorFilter(a.iconFilter());
                 canvas.drawBitmap(a.icon, null, iconRect, iconPaint);
+                iconPaint.setColorFilter(null);
             }
             textPaint.setColor(a.textColor);
             textPaint.setAlpha(alpha);

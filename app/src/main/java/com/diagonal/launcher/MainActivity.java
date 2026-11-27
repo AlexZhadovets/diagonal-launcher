@@ -37,6 +37,7 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.view.MotionEvent;
@@ -64,6 +65,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private static final String KEY_ASKED_LOCATION = "asked_location";
     private static final String KEY_SNAPSHOT_SIG = "snapshot_sig";
     private static final int REQ_LOCATION = 43;
+    static final int REQ_CALENDAR = 44;
+    static final String KEY_COLOR_PREFIX = "color:";
     private static final String PREFS = "diagonal";
     private static final String KEY_FAV = "favorites";
     private static final String KEY_ASKED_USAGE = "asked_usage";
@@ -231,6 +234,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == REQ_LOCATION) { info.resetWeather(); info.refresh(); }
+        if (requestCode == REQ_CALENDAR) panels.refreshCalendar();
     }
 
     @Override
@@ -290,6 +294,12 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             diagonal.setInfo(info.time(), sub, null, 0xFF16161C, 0xFFFFFFFF);
         }
         panels.updateCards();
+        if (panels.quick.level() == 2) panels.refreshNotifications();
+    }
+
+    AppEntry appFor(String pkg) {
+        for (AppEntry a : allApps) if (a.component.getPackageName().equals(pkg)) return a;
+        return null;
     }
 
     void openNotificationAccess() {
@@ -300,7 +310,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     void showDialog(AlertDialog d) { d.show(); shownDialog = d; }
 
-    /** Launcher settings (the "Діагональ" tile in the big quick panel). */
+    /** Launcher settings (the "Diagonal" tile in the big quick panel). */
     void showLauncherSettings() {
         String[] items = {getString(R.string.set_hide_status), getString(R.string.set_lock_snapshot)};
         boolean[] checked = {prefs.getBoolean(KEY_HIDE_STATUS, true), prefs.getBoolean(KEY_LOCK_SNAPSHOT, false)};
@@ -636,45 +646,142 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     @Override
     public void onLongPress(AppEntry app) {
+        float dp = getResources().getDisplayMetrics().density;
+        int pad = Math.round(18 * dp);
         String[] fav = readFavorites();
         int current = -1;
         for (int i = 0; i < HOME_SLOTS; i++) if (app.key.equals(fav[i])) current = i;
+        final int from = current;
 
-        List<String> labels = new ArrayList<>();
-        List<Runnable> actions = new ArrayList<>();
+        android.app.Dialog dlg = new android.app.Dialog(this, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(0xFF15151B);
+
+        // Header: the app's own stripe colour
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(pad, pad, pad, pad);
+        head.setBackgroundColor(app.color);
+        android.widget.ImageView iv = new android.widget.ImageView(this);
+        iv.setImageBitmap(app.icon);
+        if (app.glyph) iv.setColorFilter(app.textColor);
+        int is = Math.round(44 * dp);
+        head.addView(iv, new LinearLayout.LayoutParams(is, is));
+        TextView name = menuText(app.label, 22, app.textColor, true);
+        name.setPadding(Math.round(14 * dp), 0, 0, 0);
+        head.addView(name);
+        box.addView(head);
+
+        // Pin to one of the 4 home places
+        box.addView(menuCaption(getString(R.string.menu_pin)));
+        LinearLayout slots = new LinearLayout(this);
+        slots.setPadding(pad - Math.round(4 * dp), 0, pad - Math.round(4 * dp), Math.round(6 * dp));
         Map<String, AppEntry> byKey = new HashMap<>();
         for (AppEntry a : allApps) byKey.put(a.key, a);
-
         for (int slot = 0; slot < HOME_SLOTS; slot++) {
-            if (slot == current) continue;
-            AppEntry occupant = fav[slot].isEmpty() ? null : byKey.get(fav[slot]);
-            String who = occupant != null ? occupant.label
-                    : lastHome[slot] != null ? lastHome[slot].label + ", " + getString(R.string.slot_auto)
-                    : getString(R.string.slot_auto);
-            labels.add(getString(R.string.pin_to_slot, slot + 1, who));
+            AppEntry occ = fav[slot].isEmpty() ? lastHome[slot] : byKey.get(fav[slot]);
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER);
+            cell.setBackgroundColor(slot == current ? 0xFFFFFFFF : (occ != null ? occ.color : 0xFF2A2A31));
+            int fg = slot == current ? 0xFF111111 : (occ != null ? occ.textColor : 0xFFFFFFFF);
+            cell.addView(menuText(String.valueOf(slot + 1), 20, fg, true));
+            TextView who = menuText(occ == null ? "—" : occ.label, 10, fg, false);
+            who.setGravity(Gravity.CENTER);
+            cell.addView(who);
             final int s = slot;
-            final int from = current;
-            actions.add(() -> pin(app, s, from));
+            cell.setOnClickListener(v -> { dlg.dismiss(); pin(app, s, from); });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, Math.round(64 * dp), 1f);
+            lp.setMargins(Math.round(4 * dp), 0, Math.round(4 * dp), 0);
+            slots.addView(cell, lp);
         }
+        box.addView(slots);
         if (current >= 0) {
-            labels.add(getString(R.string.unpin));
-            final int from = current;
-            actions.add(() -> { String[] f = readFavorites(); f[from] = ""; saveFavorites(f); rearrange(false); });
-        }
-        labels.add(getString(R.string.app_info));
-        actions.add(() -> startFirst(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:" + app.component.getPackageName()))));
-        labels.add(getString(R.string.uninstall));
-        actions.add(() -> startFirst(new Intent(Intent.ACTION_DELETE,
-                Uri.parse("package:" + app.component.getPackageName()))));
-        if (!hasUsageAccess()) {
-            labels.add(getString(R.string.usage_allow));
-            actions.add(this::openUsageSettings);
+            box.addView(menuRow(getString(R.string.unpin), () -> {
+                dlg.dismiss();
+                String[] f = readFavorites(); f[from] = ""; saveFavorites(f); rearrange(false);
+            }));
         }
 
-        shownDialog = dialog().setTitle(app.label)
-                .setItems(labels.toArray(new String[0]), (d, which) -> actions.get(which).run())
-                .show();
+        // Colour (only two-tone apps, whose icon is a glyph)
+        if (app.glyph) {
+            box.addView(menuCaption(getString(R.string.menu_color)));
+            int[] palette = {0, 0xFFE53935, 0xFFFF7043, 0xFFFFC107, 0xFF43A047, 0xFF00ACC1, 0xFF1E88E5,
+                    0xFF3949AB, 0xFF8E24AA, 0xFFD81B60, 0xFF6D4C41, 0xFF16161C, 0xFFF2F2F2};
+            android.widget.GridLayout grid = new android.widget.GridLayout(this);
+            grid.setColumnCount(7);
+            grid.setPadding(pad - Math.round(3 * dp), 0, pad, Math.round(6 * dp));
+            int sw = Math.round(36 * dp);
+            int saved = prefs.getInt(KEY_COLOR_PREFIX + app.key, 0);
+            for (int c : palette) {
+                TextView swatch = menuText(c == 0 ? "A" : (c == saved ? "✓" : ""), 13,
+                        c == 0 ? 0xFF111111 : ColorExtractor.textColorFor(c), true);
+                swatch.setGravity(Gravity.CENTER);
+                swatch.setBackgroundColor(c == 0 ? app.autoColor : c);
+                if (c == 0) swatch.setTextColor(ColorExtractor.textColorFor(app.autoColor));
+                swatch.setOnClickListener(v -> {
+                    dlg.dismiss();
+                    if (c == 0) prefs.edit().remove(KEY_COLOR_PREFIX + app.key).apply();
+                    else prefs.edit().putInt(KEY_COLOR_PREFIX + app.key, c).apply();
+                    rearrange(false);
+                });
+                android.widget.GridLayout.LayoutParams gl = new android.widget.GridLayout.LayoutParams();
+                gl.width = sw;
+                gl.height = sw;
+                gl.setMargins(Math.round(3 * dp), Math.round(3 * dp), Math.round(3 * dp), Math.round(3 * dp));
+                grid.addView(swatch, gl);
+            }
+            box.addView(grid);
+        }
+
+        box.addView(menuRow(getString(R.string.app_info), () -> {
+            dlg.dismiss();
+            startFirst(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + app.component.getPackageName())));
+        }));
+        box.addView(menuRow(getString(R.string.uninstall), () -> {
+            dlg.dismiss();
+            startFirst(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + app.component.getPackageName())));
+        }));
+        if (!hasUsageAccess()) box.addView(menuRow(getString(R.string.usage_allow), () -> { dlg.dismiss(); openUsageSettings(); }));
+
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        dlg.setContentView(sv);
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
+            dlg.getWindow().setLayout(Math.round(Math.min(getResources().getDisplayMetrics().widthPixels - 32 * dp, 420 * dp)),
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        dlg.show();
+    }
+
+    private TextView menuText(String s, float sp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        t.setSingleLine(true);
+        t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        if (bold) t.setTypeface(android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.BOLD));
+        return t;
+    }
+
+    private TextView menuCaption(String s) {
+        float dp = getResources().getDisplayMetrics().density;
+        TextView t = menuText(s.toUpperCase(java.util.Locale.getDefault()), 11, 0x99FFFFFF, true);
+        t.setLetterSpacing(0.15f);
+        t.setPadding(Math.round(18 * dp), Math.round(14 * dp), Math.round(18 * dp), Math.round(8 * dp));
+        return t;
+    }
+
+    private TextView menuRow(String s, Runnable action) {
+        float dp = getResources().getDisplayMetrics().density;
+        TextView t = menuText(s, 17, 0xFFFFFFFF, true);
+        t.setPadding(Math.round(18 * dp), Math.round(14 * dp), Math.round(18 * dp), Math.round(14 * dp));
+        t.setOnClickListener(v -> action.run());
+        return t;
     }
 
     /** Puts app on a home slot; if it was already on another slot, the two swap places. */
@@ -704,6 +811,12 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         List<AppEntry> apps = allApps;
         Map<String, Long> use = usage;
         Collator collator = Collator.getInstance();
+        // user colours (two-tone apps only)
+        for (AppEntry a : apps) {
+            int c = a.glyph ? prefs.getInt(KEY_COLOR_PREFIX + a.key, 0) : 0;
+            a.color = c != 0 ? c : a.autoColor;
+            a.textColor = ColorExtractor.textColorFor(a.color);
+        }
 
         List<AppEntry> byUsage = new ArrayList<>(apps);
         byUsage.sort((a, b) -> {
@@ -744,7 +857,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         Collections.reverse(usageSide);              // most used ends up next to the home apps
 
         List<AppEntry> alphaSide = new ArrayList<>();
-        for (AppEntry a : apps) if (!taken.contains(a.key)) alphaSide.add(a);
+        for (AppEntry a : apps) alphaSide.add(a);   // home apps stay findable in A–Z (not in "by usage")
         alphaSide.sort((a, b) -> collator.compare(a.label, b.label));
 
         List<AppEntry> all = new ArrayList<>(usageSide.size() + favs.size() + alphaSide.size());
@@ -819,7 +932,9 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 if (d == null) d = getPackageManager().getDefaultActivityIcon();
                 Bitmap icon = toBitmap(d, iconPx);
                 ColorExtractor.Result r = ColorExtractor.analyze(icon);
-                list.add(new AppEntry(cn, label, r.glyph, r.color, r.textColor));
+                AppEntry e = new AppEntry(cn, label, r.glyph, r.color, r.textColor);
+                e.glyph = r.isGlyph;
+                list.add(e);
             } catch (RuntimeException | OutOfMemoryError e) {
                 // Broken icon: still show the app, just without an icon.
                 list.add(new AppEntry(cn, label, null, 0xFF808080, 0xFFFFFFFF));
