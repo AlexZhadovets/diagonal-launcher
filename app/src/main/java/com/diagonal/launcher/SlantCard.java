@@ -13,12 +13,17 @@ import android.widget.LinearLayout;
 final class SlantCard extends LinearLayout {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
+    private final Path raw = new Path();
+    private final Paint rounder = new Paint();
     private int cut;            // how far the top-right corner is cut in, px (0..height)
     private int baseRight = -1;
 
     SlantCard(Context c, int color) {
         super(c);
         paint.setColor(color);
+        float r = 20 * c.getResources().getDisplayMetrics().density;
+        rounder.setPathEffect(new android.graphics.CornerPathEffect(r));   // rounds every corner, the slanted one too
+        rounder.setStyle(Paint.Style.FILL);
         setWillNotDraw(false);
     }
 
@@ -51,13 +56,15 @@ final class SlantCard extends LinearLayout {
     private void buildPath() {
         int w = getWidth(), h = getHeight();
         int c = Math.min(cut, h);
+        raw.reset();
+        raw.moveTo(0, 0);
+        raw.lineTo(w - c, 0);
+        raw.lineTo(w, c);
+        raw.lineTo(w, h);
+        raw.lineTo(0, h);
+        raw.close();
         path.reset();
-        path.moveTo(0, 0);
-        path.lineTo(w - c, 0);
-        path.lineTo(w, c);
-        path.lineTo(w, h);
-        path.lineTo(0, h);
-        path.close();
+        rounder.getFillPath(raw, path);
     }
 
     @Override

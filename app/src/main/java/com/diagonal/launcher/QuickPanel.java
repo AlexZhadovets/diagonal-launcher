@@ -62,8 +62,8 @@ public class QuickPanel extends View {
         }
     }
 
-    public static final int LEVEL1_TILES = 4;
-    public static final int LEVEL1_APPS = 2;
+    public static final int LEVEL1_TILES = 6;   // the small triangle: 6 regular tiles
+    public static final int LEVEL1_APPS = 2;    // kept for API compatibility; apps are no longer shown
     private static final int TEXT_ROWS = 3;
 
     private final List<Tile> tiles = new ArrayList<>();
@@ -213,7 +213,7 @@ public class QuickPanel extends View {
     }
 
     /** Small triangle: 4 tiles + 2 apps (the apps sit in the two cells next to tile 4). */
-    private float smallLegs() { return legsFor(LEVEL1_TILES + LEVEL1_APPS); }
+    private float smallLegs() { return legsFor(LEVEL1_TILES); }
 
     private float tilesBottom() {
         float bottom = topInset;
@@ -227,12 +227,8 @@ public class QuickPanel extends View {
     private float bigLegs() {
         float tilesOnly = legsFor(tiles.size());
         if (rows.isEmpty()) return tilesOnly;
-        int text = Math.min(rows.size(), TEXT_ROWS);
-        float textBottom = tilesBottom() + 8 * dp + text * (rowH + rowGap);
-        int more = rows.size() - text;
-        float extra = more > 0 ? Math.min(3, (more + 5) / 6) * (bubble + bubbleGap) + 50 * dp : 50 * dp;
-        float need = getWidth() + textBottom + extra + 60 * dp;
-        return Math.max(tilesOnly, Math.min(need, getWidth() + getHeight()));
+        // the edge passes just under the tiles on the left, so rows below shrink along it
+        return Math.max(tilesOnly, getWidth() + tilesBottom() + 48 * dp);
     }
 
     // ---- touch ------------------------------------------------------------
@@ -246,7 +242,7 @@ public class QuickPanel extends View {
     }
 
     private int appAt(float x, float y) {
-        if (level != 1) return -1;
+        if (true) return -1;   // apps are no longer shown in the small triangle
         for (int k = 0; k < LEVEL1_APPS && k < apps.size(); k++) {
             int ci = LEVEL1_TILES + k;
             if (ci < cells.size() && hit(cells.get(ci), x, y)) return k;
@@ -330,7 +326,6 @@ public class QuickPanel extends View {
             CharSequence l = TextUtils.ellipsize(t.label, label, cell - 4 * dp, TextUtils.TruncateAt.END);
             canvas.drawText(l, 0, l.length(), c[0], c[1] + radius + 14 * dp, label);
         }
-        if (level == 1) drawApps(canvas);
         if (level != 1) drawNotifications(canvas, w);
     }
 
@@ -359,7 +354,11 @@ public class QuickPanel extends View {
         bmpPaint.setColorFilter(null);
     }
 
-    /** Newest 3 with text, the rest as round icons flowing down towards the corner. */
+    /**
+     * Notifications follow the triangle's edge: each text row is as wide as the edge allows, so
+     * they get narrower one by one; once a row would be too narrow, the rest become round icons
+     * (the last icon is "clear all").
+     */
     private void drawNotifications(Canvas canvas, int w) {
         float pad = 12 * dp;
         float y = tilesBottom() + 8 * dp;
@@ -367,12 +366,12 @@ public class QuickPanel extends View {
         for (Row r : rows) r.shown = false;
         if (rows.isEmpty()) return;
 
-        int text = Math.min(rows.size(), TEXT_ROWS);
-        for (int i = 0; i < text; i++) {
+        int i = 0;
+        while (i < rows.size()) {
             Row r = rows.get(i);
             float bottom = y + rowH;
             float width = Math.min(w - 2 * pad, legs - bottom - pad);
-            if (width < 180 * dp) break;
+            if (width < 190 * dp) break;                     // too narrow for text: icons from here
             r.box.set(w - pad - width, y, w - pad, bottom);
             r.shown = true;
             rowPaint.setColor(r.color);
@@ -390,43 +389,47 @@ public class QuickPanel extends View {
             canvas.drawText(t1, 0, t1.length(), x, r.box.top + 26 * dp, rowTitle);
             canvas.drawText(t2, 0, t2.length(), x, r.box.top + 46 * dp, rowText);
             y = bottom + rowGap;
+            i++;
         }
 
-        // the rest: icons, right-aligned rows that get shorter towards the corner
-        float ph = 38 * dp;
-        float pw = Math.max(rowTitle.measureText(clearLabel) + 32 * dp, 120 * dp);
-        int i = text;
-        while (i < rows.size()) {
+        // remaining notifications + one "clear all" bubble, right-aligned rows shrinking into the corner
+        List<RectF> spots = new ArrayList<>();
+        int need = rows.size() - i + 1;
+        while (spots.size() < need) {
             float bottom = y + bubble;
-            // always leave room for "Clear all" and stay on screen
-            if (bottom + bubbleGap + ph > Math.min(legs - pad - pw, getHeight() - pad)) break;
+            if (bottom > getHeight() - pad) break;
             float width = Math.min(w - 2 * pad, legs - bottom - pad);
             int fit = (int) ((width + bubbleGap) / (bubble + bubbleGap));
             if (fit <= 0) break;
             float x = w - pad - bubble;
-            for (int k = 0; k < fit && i < rows.size(); k++, i++) {
-                Row r = rows.get(i);
-                r.box.set(x, y, x + bubble, bottom);
-                r.shown = true;
-                rowPaint.setColor(r.color);
-                canvas.drawCircle(r.box.centerX(), r.box.centerY(), bubble / 2, rowPaint);
-                drawIcon(canvas, r.icon, r.filter, r.box.centerX(), r.box.centerY(), bubble * 0.6f);
+            for (int k = 0; k < fit && spots.size() < need; k++) {
+                spots.add(new RectF(x, y, x + bubble, bottom));
                 x -= bubble + bubbleGap;
             }
             y = bottom + bubbleGap;
         }
-
-        // "Clear all" pill
-        float bottom = y + ph;
-        if (legs - bottom - pad >= pw) {
-            clearBox.set(w - pad - pw, y, w - pad, bottom);
-            clearShown = true;
-            rowPaint.setColor(0xFF2A2A31);
-            canvas.drawRoundRect(clearBox, ph / 2, ph / 2, rowPaint);
-            rowTitle.setColor(0xFFFFFFFF);
-            float tw = rowTitle.measureText(clearLabel);
-            canvas.drawText(clearLabel, clearBox.centerX() - tw / 2, clearBox.centerY() + 5 * dp, rowTitle);
+        if (spots.isEmpty()) return;
+        int last = spots.size() - 1;                          // last spot is always "clear all"
+        for (int k = 0; k < last && i < rows.size(); k++, i++) {
+            Row r = rows.get(i);
+            r.box.set(spots.get(k));
+            r.shown = true;
+            rowPaint.setColor(r.color);
+            canvas.drawCircle(r.box.centerX(), r.box.centerY(), bubble / 2, rowPaint);
+            drawIcon(canvas, r.icon, r.filter, r.box.centerX(), r.box.centerY(), bubble * 0.6f);
         }
+        clearBox.set(spots.get(last));
+        clearShown = true;
+        rowPaint.setColor(0xFF2A2A31);
+        canvas.drawCircle(clearBox.centerX(), clearBox.centerY(), bubble / 2, rowPaint);
+        iconPaint.setColor(0xFFFFFFFF);
+        iconPaint.setStyle(Paint.Style.STROKE);
+        iconPaint.setStrokeWidth(2.5f * dp);
+        iconPaint.setStrokeCap(Paint.Cap.ROUND);
+        float c = bubble * 0.17f;
+        canvas.drawLine(clearBox.centerX() - c, clearBox.centerY() - c, clearBox.centerX() + c, clearBox.centerY() + c, iconPaint);
+        canvas.drawLine(clearBox.centerX() + c, clearBox.centerY() - c, clearBox.centerX() - c, clearBox.centerY() + c, iconPaint);
+        iconPaint.setStyle(Paint.Style.FILL);
     }
 
     @Override

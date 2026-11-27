@@ -530,7 +530,10 @@ final class Panels {
         chatRow.setOrientation(LinearLayout.HORIZONTAL);
         chatRow.setPadding(0, Math.round(6 * dp), 0, 0);
         chatHint = text(13, 0xAAFFFFFF, false);
-        chats.addView(chatRow);
+        android.widget.HorizontalScrollView chatScroll = new android.widget.HorizontalScrollView(act);
+        chatScroll.setHorizontalScrollBarEnabled(false);
+        chatScroll.addView(chatRow);
+        chats.addView(chatScroll);
         chats.addView(chatHint);
         register("chats", chats, 124);
 
@@ -558,7 +561,10 @@ final class Panels {
         claudeChips = new LinearLayout(act);
         claudeChips.setOrientation(LinearLayout.HORIZONTAL);
         claudeChips.setPadding(0, Math.round(8 * dp), 0, 0);
-        claude.addView(claudeChips);
+        android.widget.HorizontalScrollView claudeScroll = new android.widget.HorizontalScrollView(act);
+        claudeScroll.setHorizontalScrollBarEnabled(false);
+        claudeScroll.addView(claudeChips);
+        claude.addView(claudeScroll);
         register("claude", claude, 140);
 
         buildExtraCards();
@@ -952,7 +958,10 @@ final class Panels {
 
         LinearLayout chips = new LinearLayout(act);
         chips.setPadding(0, Math.round(10 * dp), 0, 0);
-        card.addView(chips);
+        android.widget.HorizontalScrollView chipScroll = new android.widget.HorizontalScrollView(act);
+        chipScroll.setHorizontalScrollBarEnabled(false);
+        chipScroll.addView(chips);
+        card.addView(chipScroll);
         appChipRows.put(pkg, chips);
         appCardEntries.put(pkg, app);
         appCardColors.put(pkg, app.color);
@@ -987,7 +996,7 @@ final class Panels {
                                     ? Integer.compare(a.getRank(), b.getRank())
                                     : (a.isDeclaredInManifest() ? -1 : 1));
                             for (android.content.pm.ShortcutInfo si : s) {
-                                if (!si.isEnabled() || list.size() >= 4) continue;
+                                if (!si.isEnabled() || list.size() >= 10) continue;
                                 list.add(load(la, si, density, iconPx));
                             }
                         }
@@ -1176,7 +1185,7 @@ final class Panels {
                         if (claude.size() < 3 && seen.add(si.getId() + pkg)) claude.add(load(la, si, density, iconPx));
                         continue;
                     }
-                    if (chats.size() >= 5 || !isConversation(si)) continue;
+                    if (chats.size() >= 15 || !isConversation(si)) continue;
                     if (!seen.add(pkg + "/" + si.getShortLabel())) continue;
                     chats.add(load(la, si, density, iconPx));
                 }
@@ -1249,7 +1258,7 @@ final class Panels {
         claudeChips.removeAllViews();
         List<String> labels = new ArrayList<>();
         List<Runnable> actions = new ArrayList<>();
-        for (int k = 0; k < Math.min(2, claude.size()); k++) {
+        for (int k = 0; k < claude.size(); k++) {
             Sc s = claude.get(k);
             labels.add(s.label);
             actions.add(() -> startShortcut(s.info));
