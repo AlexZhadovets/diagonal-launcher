@@ -211,6 +211,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         closeSearch();
         panels.closeAll();
         recenterOnNextLoad = true;
+        tabletPage = 0;
         diagonal.jumpToCenter();
         maybeSnapshotLockScreen();
     }
@@ -265,6 +266,27 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     @Override
     public void onInfoClick() {
+        if (currentPage instanceof NotifList.Item) {
+            NotifList.Item it = (NotifList.Item) currentPage;
+            boolean ok = false;
+            try { if (it.intent != null) { InfoHub.sendAllowingStart(this, it.intent); ok = true; } } catch (Exception ignored) { }
+            if (!ok) { AppEntry a = appFor(it.pkg); if (a != null) launch(a); }
+            NotifService svc = NotifService.instance;
+            if (it.autoCancel && svc != null) { try { svc.cancelNotification(it.key); } catch (RuntimeException ignored) { } }
+            return;
+        }
+        if (currentPage instanceof InfoHub.Media) {
+            InfoHub.Media pm = (InfoHub.Media) currentPage;
+            boolean ok = false;
+            try {
+                if (pm.controller != null && pm.controller.getSessionActivity() != null) {
+                    InfoHub.sendAllowingStart(this, pm.controller.getSessionActivity());
+                    ok = true;
+                }
+            } catch (Exception ignored) { }
+            if (!ok) { AppEntry a = appFor(pm.pkg); if (a != null) launch(a); }
+            return;
+        }
         if (info.notif != null) {
             String pkg = info.notif.pkg;
             if (!info.openNotification()) { AppEntry a = appFor(pkg); if (a != null) launch(a); }
@@ -287,7 +309,92 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     }
 
     /** Music that plays > newest notification > clock + weather. */
+    // ---- tablet pages: main view, other players, then notifications -------
+
+    private int tabletPage;
+    private final Map<String, NotifList.Item> pageItems = new HashMap<>();
+    private final Map<Bitmap, Integer> artColors = new HashMap<>();
+    private final Map<Bitmap, Bitmap> artSmall = new HashMap<>();
+
+    /** Pages after the main one: InfoHub.Media (other players) or NotifList.Item (notifications). */
+    private List<Object> extraPages() {
+        List<Object> out = new ArrayList<>();
+        InfoHub.Media main0 = info.media != null && (!info.media.stale || forcePlayer) ? info.media : null;
+        for (InfoHub.Media m : info.allMedia) {
+            if (main0 != null && m.controller == main0.controller) continue;
+            out.add(m);
+        }
+        NotifService svc = NotifService.instance;
+        if (svc != null) {
+            android.service.notification.StatusBarNotification[] all = null;
+            try { all = svc.getActiveNotifications(); } catch (RuntimeException ignored) { }
+            if (all != null) {
+                List<android.service.notification.StatusBarNotification> list = new ArrayList<>();
+                for (android.service.notification.StatusBarNotification sbn : all) {
+                    android.app.Notification nn = sbn.getNotification();
+                    if (nn == null || sbn.isOngoing() || !sbn.isClearable()) continue;
+                    if ((nn.flags & android.app.Notification.FLAG_GROUP_SUMMARY) != 0) continue;
+                    if (sbn.getPackageName().equals(getPackageName())) continue;
+                    if (android.app.Notification.CATEGORY_TRANSPORT.equals(nn.category)) continue;
+                    list.add(sbn);
+                }
+                list.sort((a, b) -> Long.compare(b.getPostTime(), a.getPostTime()));
+                Map<String, NotifList.Item> keep = new HashMap<>();
+                for (int i = 0; i < list.size() && i < 8; i++) {
+                    android.service.notification.StatusBarNotification sbn = list.get(i);
+                    String k = sbn.getKey() + "@" + sbn.getPostTime();
+                    NotifList.Item it = pageItems.get(k);
+                    if (it == null) it = NotifList.from(this, sbn);
+                    keep.put(k, it);
+                    if (!it.title.isEmpty() || !it.text.isEmpty()) out.add(it);
+                }
+                pageItems.clear();
+                pageItems.putAll(keep);
+            }
+        }
+        return out;
+    }
+
+    private Object currentPage;
+
+    @Override
+    public void onTabletSwipe(int direction) {
+        tabletPage = Math.max(0, tabletPage + direction);
+        updateInfoStripe();
+    }
+
+    /** Colour of a cover, worked out once on the worker thread. */
+    private int artColor(Bitmap art) {
+        if (art == null) return 0xFF26262E;
+        Integer c = artColors.get(art);
+        if (c != null) return c;
+        artColors.put(art, 0xFF26262E);
+        worker.execute(() -> {
+            Bitmap sm = Bitmap.createScaledBitmap(art, 96, 96, true);
+            int col = ColorExtractor.analyze(sm).color;
+            main.post(() -> {
+                if (artColors.size() > 20) { artColors.clear(); artSmall.clear(); }
+                artColors.put(art, col);
+                artSmall.put(art, sm);
+                updateInfoStripe();
+            });
+        });
+        return 0xFF26262E;
+    }
+
     private void updateInfoStripe() {
+        List<Object> extra = extraPages();
+        tabletPage = Math.min(tabletPage, extra.size());
+        diagonal.setPager(extra.size() + 1, tabletPage);
+        currentPage = tabletPage == 0 ? null : extra.get(tabletPage - 1);
+        if (currentPage != null) {
+            showPage(currentPage);
+            updateStatus();
+            panels.updateCards();
+            if (panels.quick.level() == 2) panels.refreshNotifications();
+            maybeShowBanner();
+            return;
+        }
         InfoHub.Media m = info.media;
         InfoHub.Notif n = info.notif;
         String notifLine = null;
@@ -336,6 +443,31 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
             diagonal.setInfo(info.time(), sub, null, 0xFF16161C, 0xFFFFFFFF);
         }
+        updateStatus();
+        panels.updateCards();
+        if (panels.quick.level() == 2) panels.refreshNotifications();
+        maybeShowBanner();
+    }
+
+    /** A player or a notification shown on its own tablet page. */
+    private void showPage(Object page) {
+        if (page instanceof InfoHub.Media) {
+            InfoHub.Media pm = (InfoHub.Media) page;
+            int c = artColor(pm.art);
+            Bitmap small = pm.art != null ? artSmall.get(pm.art) : null;
+            diagonal.setInfo(pm.title, pm.artist, small, c, ColorExtractor.textColorFor(c), true, pm.playing);
+            diagonal.setMusicPosition(pm.position, pm.updateTime, pm.speed, pm.duration);
+        } else {
+            NotifList.Item it = (NotifList.Item) page;
+            AppEntry app = appFor(it.pkg);
+            int c = app != null ? app.color : 0xFF26262E;
+            String title = it.title.isEmpty() ? (app != null ? app.label : "") : it.title;
+            String sub = (app != null ? app.label + " · " : "") + it.text;
+            diagonal.setInfo(title, sub, it.large, c, ColorExtractor.textColorFor(c));
+        }
+    }
+
+    private void updateStatus() {
         int alert = "red".equals(info.alertLevel) ? 2 : "yellow".equals(info.alertLevel) ? 1 : 0;
         Intent bat = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         int pct = -1;
@@ -348,9 +480,6 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             chg = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL;
         }
         diagonal.setStatus(alert, pct, chg);
-        panels.updateCards();
-        if (panels.quick.level() == 2) panels.refreshNotifications();
-        maybeShowBanner();
     }
 
     int artColor() { return lastArtColor; }
@@ -375,9 +504,10 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                     new Intent(Intent.ACTION_VIEW, Uri.parse("https://alerts.in.ua")));
             return;
         }
-        if (which == 0) info.previous();
-        else if (which == 2) info.next();
-        else info.playPause();
+        InfoHub.Media target = currentPage instanceof InfoHub.Media ? (InfoHub.Media) currentPage : info.media;
+        if (which == 0) info.previous(target);
+        else if (which == 2) info.next(target);
+        else info.playPause(target);
     }
 
     AppEntry appFor(String pkg) {

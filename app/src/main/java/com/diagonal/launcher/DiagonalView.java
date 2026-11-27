@@ -39,6 +39,8 @@ public class DiagonalView extends View {
         void onInfoLongPress();
         /** 0 previous, 1 play/pause, 2 next, 3 back to the player (from the paused mini cover), 4 alert dot. */
         void onMusicControl(int which);
+        /** Swipe along the tablet: +1 next page (players, then notifications), −1 back. */
+        void onTabletSwipe(int direction);
         /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
         void onCornerSwipe(int direction);
     }
@@ -87,6 +89,16 @@ public class DiagonalView extends View {
     private float scroll;
     private boolean pendingCenter = true;
     private boolean wasFlinging;
+    private boolean downOnTablet;
+    private int pageCount = 1, pageIndex;
+
+    /** Little dots on the tablet: which page (main / players / notifications) is shown. */
+    public void setPager(int count, int index) {
+        if (count == pageCount && index == pageIndex) return;
+        pageCount = count;
+        pageIndex = index;
+        invalidate();
+    }
 
     // Swipes along the stripes open the corner panels instead of scrolling.
     private float downX, downY;
@@ -437,6 +449,7 @@ public class DiagonalView extends View {
             drawInfoContent(canvas, infoNow, s, tMin, tMax, 1f);
         }
         drawStatus(canvas, s, tMin, tMax);
+        drawPager(canvas, s, tMin, tMax);
         canvas.restore();
         if (infoNow.music) postInvalidateDelayed(infoNow.playing ? 500 : 15000);   // progress bar + clock
     }
@@ -557,6 +570,21 @@ public class DiagonalView extends View {
             clockText = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date());
         }
         return clockText;
+    }
+
+    private void drawPager(Canvas canvas, float s, float tMin, float tMax) {
+        if (pageCount <= 1) return;
+        float mid = (tMin + tMax) / 2f;
+        float y = mid + band / 2f - (infoNow.music ? 30 : 16) * dp;
+        float r = 3 * dp, step = 11 * dp;
+        float x0 = s - (pageCount - 1) * step / 2f;
+        for (int i = 0; i < pageCount; i++) {
+            statusPaint.setStyle(Paint.Style.FILL);
+            statusPaint.setColor(infoNow.text);
+            statusPaint.setAlpha(i == pageIndex ? 255 : 90);
+            canvas.drawCircle(x0 + i * step, y, i == pageIndex ? r * 1.3f : r, statusPaint);
+        }
+        statusPaint.setAlpha(255);
     }
 
     /** Top-left corner of the tablet: alert dot (red / yellow) and battery %. */
@@ -767,7 +795,10 @@ public class DiagonalView extends View {
         int action = e.getActionMasked();
         if (action == MotionEvent.ACTION_UP && touchMode == 2) {
             float along = ((e.getX() - downX) - (e.getY() - downY)) * INV_SQRT2; // + = towards top-right
-            if (Math.abs(along) >= cornerMin && listener != null) listener.onCornerSwipe(along > 0 ? 1 : -1);
+            if (Math.abs(along) >= cornerMin && listener != null) {
+                if (downOnTablet) listener.onTabletSwipe(along > 0 ? 1 : -1);   // page the tablet
+                else listener.onCornerSwipe(along > 0 ? 1 : -1);
+            }
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) touchMode = 0;
         return handled || super.onTouchEvent(e);
@@ -806,6 +837,8 @@ public class DiagonalView extends View {
             downX = e.getX();
             downY = e.getY();
             touchMode = 0;
+            int di = indexAt(downX, downY);
+            downOnTablet = di >= 0 && items.get(di).info && pageCount > 1;
             return true;
         }
 

@@ -284,9 +284,13 @@ final class InfoHub {
         }
     }
 
+    /** Every player that has something loaded (for paging through them on the tablet). */
+    final List<Media> allMedia = new ArrayList<>();
+    private final Map<String, Media> lastByPkg = new HashMap<>();
+
     private void readMedia() {
-        Media prev = media;
         media = null;
+        allMedia.clear();
         if (!hasNotificationAccess()) return;
         if (sessionsListener == null && started) watchSessions();
         List<MediaController> list;
@@ -295,27 +299,28 @@ final class InfoHub {
         } catch (RuntimeException e) {
             return;
         }
-        MediaController best = null;
-        MediaMetadata bestMd = null;
-        boolean bestPlaying = false;
-        for (MediaController c : list) {
-            PlaybackState st = c.getPlaybackState();
-            boolean playing = st != null && st.getState() == PlaybackState.STATE_PLAYING;
-            MediaMetadata cmd = c.getMetadata();
-            if (cmd == null) continue;
-            if (best == null || (playing && !bestPlaying)) { best = c; bestMd = cmd; bestPlaying = playing; }
-        }
         long now = System.currentTimeMillis();
-        if (bestPlaying) lastPlayingAt = now;
+        Media best = null;
+        for (MediaController c : list) {
+            MediaMetadata md;
+            try { md = c.getMetadata(); } catch (RuntimeException e) { continue; }
+            if (md == null) continue;
+            Media m = build(c, md, now);
+            allMedia.add(m);
+            if (best == null || (m.playing && !best.playing)) best = m;
+        }
         if (best == null) return;
+        if (best.playing) lastPlayingAt = now;
+        best.stale = !best.playing && now - lastPlayingAt > SHOW_PAUSED_MS;   // paused for a long time
+        media = best;
+    }
 
-        MediaMetadata md = bestMd;
+    private Media build(MediaController c, MediaMetadata md, long now) {
         Media m = new Media();
-        m.controller = best;
-        m.pkg = best.getPackageName();
-        m.playing = bestPlaying;
-        m.stale = !bestPlaying && now - lastPlayingAt > SHOW_PAUSED_MS;   // paused for a long time
-        PlaybackState ps = best.getPlaybackState();
+        m.controller = c;
+        m.pkg = c.getPackageName();
+        PlaybackState ps = c.getPlaybackState();
+        m.playing = ps != null && ps.getState() == PlaybackState.STATE_PLAYING;
         if (ps != null) {
             m.position = ps.getPosition();
             m.updateTime = ps.getLastPositionUpdateTime();
@@ -331,15 +336,16 @@ final class InfoHub {
         if (m.title == null) m.title = "";
         if (m.artist == null) m.artist = "";
         // Keep the same Bitmap object for the same track, so callers can cache work on it.
-        if (prev != null && m.title.equals(prev.title) && m.artist.equals(prev.artist)
-                && m.pkg.equals(prev.pkg) && prev.art != null) {
-            m.art = prev.art;
-        }
-        media = m;
+        Media prev = lastByPkg.get(m.pkg);
+        if (prev != null && m.title.equals(prev.title) && m.artist.equals(prev.artist) && prev.art != null) m.art = prev.art;
+        lastByPkg.put(m.pkg, m);
+        return m;
     }
 
-    void playPause() {
-        if (media == null || media.controller == null) {
+    void playPause() { playPause(media); }
+
+    void playPause(Media target) {
+        if (target == null || target.controller == null) {
             // nothing active: ask the last music app to resume
             android.media.AudioManager am = ctx.getSystemService(android.media.AudioManager.class);
             am.dispatchMediaKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PLAY));
@@ -347,20 +353,24 @@ final class InfoHub {
             return;
         }
         try {
-            if (media.playing) media.controller.getTransportControls().pause();
-            else media.controller.getTransportControls().play();
+            if (target.playing) target.controller.getTransportControls().pause();
+            else target.controller.getTransportControls().play();
         } catch (RuntimeException ignored) { }
     }
 
-    void next() {
-        if (media != null && media.controller != null) {
-            try { media.controller.getTransportControls().skipToNext(); } catch (RuntimeException ignored) { }
+    void next() { next(media); }
+
+    void next(Media target) {
+        if (target != null && target.controller != null) {
+            try { target.controller.getTransportControls().skipToNext(); } catch (RuntimeException ignored) { }
         }
     }
 
-    void previous() {
-        if (media != null && media.controller != null) {
-            try { media.controller.getTransportControls().skipToPrevious(); } catch (RuntimeException ignored) { }
+    void previous() { previous(media); }
+
+    void previous(Media target) {
+        if (target != null && target.controller != null) {
+            try { target.controller.getTransportControls().skipToPrevious(); } catch (RuntimeException ignored) { }
         }
     }
 
