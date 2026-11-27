@@ -383,7 +383,8 @@ final class Panels {
                     case T_TORCH: t.active = torchOn; break;
                     case T_DND: {
                         NotificationManager nm = act.getSystemService(NotificationManager.class);
-                        t.active = nm.getCurrentInterruptionFilter() > NotificationManager.INTERRUPTION_FILTER_ALL;
+                        t.active = nm.getCurrentInterruptionFilter() > NotificationManager.INTERRUPTION_FILTER_ALL
+                                && !act.quietActive;   // Diagonal's own home-screen rule isn't the user's DND
                         break;
                     }
                     case T_ROTATE:

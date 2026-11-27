@@ -368,7 +368,7 @@ public class NotifList extends ScrollView {
         reply.setPadding(0, Math.round(6 * dp), 0, 0);
         EditText field = new EditText(getContext());
         field.setHint(host.replyHint());
-        int fieldInk = ColorExtractor.textColorFor(accent);
+        int fieldInk = 0xFFFFFFFF;
         field.setHintTextColor((fieldInk & 0x00FFFFFF) | 0x77000000);
         field.setTextColor(fieldInk);
         field.setTextSize(14);
@@ -381,7 +381,7 @@ public class NotifList extends ScrollView {
         int hp = Math.round(12 * dp);
         field.setPadding(hp, Math.round(8 * dp), hp, Math.round(8 * dp));
         reply.addView(field, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView sendBtn = text(18, ColorExtractor.textColorFor(accent), true);
+        TextView sendBtn = text(18, 0xFFFFFFFF, true);
         sendBtn.setText("➤");
         sendBtn.setGravity(Gravity.CENTER);
         int s = Math.round(40 * dp);

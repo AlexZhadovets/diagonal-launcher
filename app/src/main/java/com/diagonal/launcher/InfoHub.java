@@ -54,6 +54,7 @@ final class InfoHub {
         boolean playing;
         MediaController controller;
         long position, updateTime, duration;
+        boolean stale;
         float speed = 1f;
     }
 
@@ -64,7 +65,7 @@ final class InfoHub {
     }
 
     private static final long WEATHER_EVERY_MS = 30 * 60 * 1000L;
-    private static final long SHOW_PAUSED_MS = 5 * 60 * 1000L;
+    private static final long SHOW_PAUSED_MS = 2 * 60 * 1000L;
     /** A new notification shows on the centre stripe only for this long after it arrives. */
     static final long NOTIF_SHOW_MS = 8000L;
 
@@ -210,13 +211,14 @@ final class InfoHub {
         }
         long now = System.currentTimeMillis();
         if (bestPlaying) lastPlayingAt = now;
-        if (best == null || (!bestPlaying && now - lastPlayingAt > SHOW_PAUSED_MS)) return;
+        if (best == null) return;
 
         MediaMetadata md = bestMd;
         Media m = new Media();
         m.controller = best;
         m.pkg = best.getPackageName();
         m.playing = bestPlaying;
+        m.stale = !bestPlaying && now - lastPlayingAt > SHOW_PAUSED_MS;   // paused for a long time
         PlaybackState ps = best.getPlaybackState();
         if (ps != null) {
             m.position = ps.getPosition();

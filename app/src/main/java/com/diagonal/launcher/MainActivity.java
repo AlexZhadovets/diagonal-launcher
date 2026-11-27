@@ -107,7 +107,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         launcherApps = getSystemService(LauncherApps.class);
         info = new InfoHub(this);
         info.setListener(this::updateInfoStripe);
-        quietOff();   // in case the app was killed while the quiet mode was on
+        undoOldQuietMode();   // a short-lived earlier version changed the user's DND settings
+        quietOff();           // in case the app was killed while the quiet mode was on
         infoEntry = new AppEntry(new ComponentName(getPackageName(), "info"));
         goEdgeToEdge();
 
@@ -170,6 +171,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             searchLayer.setPadding(0, insets.getSystemWindowInsetTop(), 0, bottom);
             int cutTop = Build.VERSION.SDK_INT >= 28 && insets.getDisplayCutout() != null
                     ? insets.getDisplayCutout().getSafeInsetTop() : 0;
+            topInset = Math.max(insets.getSystemWindowInsetTop(), cutTop);
             panels.setInsets(Math.max(insets.getSystemWindowInsetTop(), cutTop),
                     insets.getSystemWindowInsetBottom());
             if (sp.topMargin < cutTop + Math.round(6 * dp)) {
@@ -218,6 +220,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         super.onPause();
         resumed = false;
         quietOff();      // pop-ups behave normally everywhere else
+        main.removeCallbacks(hideBannerLater);
         hideBanner();
     }
 
@@ -294,28 +297,35 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             String who = n.title.isEmpty() ? from : (from.isEmpty() ? n.title : from + " · " + n.title);
             notifLine = "● " + who + (n.text.isEmpty() ? "" : ": " + n.text);
         }
-        if (m != null) {
-            if (m.art != lastArt) {
-                // new track art: scale + colour off the main thread, then redraw
-                final Bitmap art = m.art;
-                lastArt = art;
-                if (art == null) { lastArtScaled = null; lastArtColor = 0xFF26262E; }
-                else worker.execute(() -> {
-                    Bitmap scaled = Bitmap.createScaledBitmap(art, 96, 96, true);
-                    int col = ColorExtractor.analyze(scaled).color;
-                    main.post(() -> {
-                        if (lastArt != art) return;
-                        lastArtScaled = scaled;
-                        lastArtColor = col;
-                        updateInfoStripe();
-                    });
+        if (m != null && m.art != lastArt) {
+            // new track art: scale + colour off the main thread, then redraw
+            final Bitmap art = m.art;
+            lastArt = art;
+            if (art == null) { lastArtScaled = null; lastArtColor = 0xFF26262E; }
+            else worker.execute(() -> {
+                Bitmap scaled = Bitmap.createScaledBitmap(art, 96, 96, true);
+                int col = ColorExtractor.analyze(scaled).color;
+                main.post(() -> {
+                    if (lastArt != art) return;
+                    lastArtScaled = scaled;
+                    lastArtColor = col;
+                    updateInfoStripe();
                 });
-            }
+            });
+        }
+        if (m == null || m.playing) forcePlayer = false;
+        if (m != null && (!m.stale || forcePlayer)) {
             int c = lastArtColor;
             // player: a new message only replaces the artist line for a moment; the colour stays
             diagonal.setInfo(m.title, notifLine != null ? notifLine : m.artist, lastArtScaled, c,
                     ColorExtractor.textColorFor(c), true, m.playing);
             diagonal.setMusicPosition(m.position, m.updateTime, m.speed, m.duration);
+        } else if (m != null && notifLine == null) {
+            // paused for a long time: back to the clock, with the cover + ▶ in the corner
+            String sub = info.date();
+            if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
+            Bitmap mini = lastArtScaled != null ? lastArtScaled : placeholderArt();
+            diagonal.setInfo(info.time(), sub, null, 0xFF16161C, 0xFFFFFFFF, false, false, mini);
         } else if (notifLine != null) {
             // clock stays; for a few seconds the stripe takes the app's colour and shows the message
             AppEntry na = appFor(n.pkg);
@@ -333,8 +343,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     int artColor() { return lastArtColor; }
 
+    private boolean forcePlayer;
+    private Bitmap placeholder;
+
+    private Bitmap placeholderArt() {
+        if (placeholder == null) {
+            placeholder = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888);
+            placeholder.eraseColor(0xFF3A3A44);
+        }
+        return placeholder;
+    }
+
     @Override
     public void onMusicControl(int which) {
+        if (which == 3) { forcePlayer = true; updateInfoStripe(); return; }
         if (which == 0) info.previous();
         else if (which == 2) info.next();
         else info.playPause();
@@ -440,7 +462,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                     .show();
             return;
         }
-        if (!prefs.getBoolean(KEY_QUIET_ASKED, false) && prefs.getBoolean(KEY_QUIET, true)
+        if (Build.VERSION.SDK_INT >= 29 && !prefs.getBoolean(KEY_QUIET_ASKED, false) && prefs.getBoolean(KEY_QUIET, true)
                 && !getSystemService(android.app.NotificationManager.class).isNotificationPolicyAccessGranted()) {
             maybeAskQuietAccess();
             return;
@@ -460,6 +482,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         panels.onDestroy();
         info.destroy();
         if (shownDialog != null) shownDialog.dismiss();
+        main.removeCallbacks(hideBannerLater);
         quietOff();
         worker.shutdownNow();
         super.onDestroy();
@@ -831,72 +854,90 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private View banner;
 
     /**
-     * While Diagonal is on screen: a Do Not Disturb mode that still lets calls, alarms, media,
-     * system and important conversations through (they pop up as usual) but keeps every other
-     * notification from popping up. Those show in Diagonal's own banner instead.
+     * While Diagonal is on screen: Diagonal's OWN Do Not Disturb rule (it never touches the
+     * user's DND settings or schedules). Calls, alarms, media, system and important
+     * conversations still pop up; other notifications don't, and Diagonal shows its own banner.
      */
-    private void quietOn() {
-        if (!prefs.getBoolean(KEY_QUIET, true)) return;
-        android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
-        if (!nm.isNotificationPolicyAccessGranted()) return;
-        if (nm.getCurrentInterruptionFilter() != android.app.NotificationManager.INTERRUPTION_FILTER_ALL) return; // user's own DND
+    private static final android.net.Uri ZEN_URI = android.net.Uri.parse("condition://com.diagonal.launcher/home");
+
+    private String zenRuleId(android.app.NotificationManager nm) {
+        if (Build.VERSION.SDK_INT < 29) return null;
+        String id = prefs.getString("zen_rule", null);
         try {
-            android.app.NotificationManager.Policy old = nm.getNotificationPolicy();
-            SharedPreferences.Editor e = prefs.edit()
-                    .putInt("qp_cat", old.priorityCategories).putInt("qp_calls", old.priorityCallSenders)
-                    .putInt("qp_msgs", old.priorityMessageSenders).putInt("qp_fx", old.suppressedVisualEffects);
-            if (Build.VERSION.SDK_INT >= 30) e.putInt("qp_conv", old.priorityConversationSenders);
-            e.putBoolean(KEY_QUIET_ON, true).apply();
-            int cats = android.app.NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS
-                    | android.app.NotificationManager.Policy.PRIORITY_CATEGORY_MEDIA
-                    | android.app.NotificationManager.Policy.PRIORITY_CATEGORY_SYSTEM
-                    | android.app.NotificationManager.Policy.PRIORITY_CATEGORY_CALLS
-                    | android.app.NotificationManager.Policy.PRIORITY_CATEGORY_REPEAT_CALLERS;
-            int fx = android.app.NotificationManager.Policy.SUPPRESSED_EFFECT_PEEK;
-            android.app.NotificationManager.Policy p;
+            if (id != null && nm.getAutomaticZenRule(id) != null) return id;
+            android.service.notification.ZenPolicy.Builder b = new android.service.notification.ZenPolicy.Builder()
+                    .allowAlarms(true).allowMedia(true).allowSystem(true)
+                    .allowCalls(android.service.notification.ZenPolicy.PEOPLE_TYPE_ANYONE)
+                    .allowRepeatCallers(true)
+                    .allowMessages(android.service.notification.ZenPolicy.PEOPLE_TYPE_NONE)
+                    .allowReminders(false).allowEvents(false)
+                    .showPeeking(false)                       // no pop-ups for the rest
+                    .showInNotificationList(true).showStatusBarIcons(true).showBadges(true);
             if (Build.VERSION.SDK_INT >= 30) {
-                cats |= android.app.NotificationManager.Policy.PRIORITY_CATEGORY_CONVERSATIONS;
-                p = new android.app.NotificationManager.Policy(cats,
-                        android.app.NotificationManager.Policy.PRIORITY_SENDERS_ANY,
-                        android.app.NotificationManager.Policy.PRIORITY_SENDERS_ANY, fx,
-                        android.app.NotificationManager.Policy.CONVERSATION_SENDERS_IMPORTANT);
-            } else {
-                p = new android.app.NotificationManager.Policy(cats,
-                        android.app.NotificationManager.Policy.PRIORITY_SENDERS_ANY,
-                        android.app.NotificationManager.Policy.PRIORITY_SENDERS_ANY, fx);
+                b.allowConversations(android.service.notification.ZenPolicy.CONVERSATION_SENDERS_IMPORTANT);
             }
-            nm.setNotificationPolicy(p);
-            nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY);
-        } catch (RuntimeException ignored) { }
+            android.app.AutomaticZenRule rule = new android.app.AutomaticZenRule(getString(R.string.quiet_title),
+                    null, new ComponentName(this, MainActivity.class), ZEN_URI, b.build(),
+                    android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY, true);
+            id = nm.addAutomaticZenRule(rule);
+            prefs.edit().putString("zen_rule", id).commit();
+            return id;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
-    /** Puts Do Not Disturb back exactly as the user had it. */
-    private void quietOff() {
-        if (!prefs.getBoolean(KEY_QUIET_ON, false)) return;
+    private void setZen(boolean on) {
+        if (Build.VERSION.SDK_INT < 29) return;
         android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
         try {
-            if (nm.isNotificationPolicyAccessGranted()) {
-                android.app.NotificationManager.Policy p;
-                if (Build.VERSION.SDK_INT >= 30) {
-                    p = new android.app.NotificationManager.Policy(prefs.getInt("qp_cat", 0), prefs.getInt("qp_calls", 0),
-                            prefs.getInt("qp_msgs", 0), prefs.getInt("qp_fx", 0), prefs.getInt("qp_conv", 0));
-                } else {
-                    p = new android.app.NotificationManager.Policy(prefs.getInt("qp_cat", 0), prefs.getInt("qp_calls", 0),
-                            prefs.getInt("qp_msgs", 0), prefs.getInt("qp_fx", 0));
-                }
+            if (!nm.isNotificationPolicyAccessGranted()) return;
+            String id = on ? zenRuleId(nm) : prefs.getString("zen_rule", null);
+            if (id == null) return;
+            nm.setAutomaticZenRuleState(id, new android.service.notification.Condition(ZEN_URI,
+                    getString(R.string.quiet_title),
+                    on ? android.service.notification.Condition.STATE_TRUE : android.service.notification.Condition.STATE_FALSE));
+            quietActive = on;
+        } catch (Throwable ignored) { }
+    }
+
+    boolean quietActive;
+    private int topInset;
+
+    private void quietOn() {
+        if (prefs.getBoolean(KEY_QUIET, true)) setZen(true);
+    }
+
+    private void quietOff() { setZen(false); }
+
+    /** Puts back DND exactly as it was if build 27 left its global change behind. */
+    private void undoOldQuietMode() {
+        if (!prefs.getBoolean(KEY_QUIET_ON, false)) return;
+        try {
+            android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+            if (nm.isNotificationPolicyAccessGranted() && Build.VERSION.SDK_INT >= 28) {
+                android.app.NotificationManager.Policy p = Build.VERSION.SDK_INT >= 30
+                        ? new android.app.NotificationManager.Policy(prefs.getInt("qp_cat", 0), prefs.getInt("qp_calls", 0),
+                                prefs.getInt("qp_msgs", 0), prefs.getInt("qp_fx", 0), prefs.getInt("qp_conv", 0))
+                        : new android.app.NotificationManager.Policy(prefs.getInt("qp_cat", 0), prefs.getInt("qp_calls", 0),
+                                prefs.getInt("qp_msgs", 0), prefs.getInt("qp_fx", 0));
                 nm.setNotificationPolicy(p);
-                nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALL);
+                if (nm.getCurrentInterruptionFilter() == android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY) {
+                    nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALL);
+                }
             }
-        } catch (RuntimeException ignored) { }
-        prefs.edit().putBoolean(KEY_QUIET_ON, false).apply();
+        } catch (Throwable ignored) { }
+        prefs.edit().putBoolean(KEY_QUIET_ON, false).commit();
     }
 
     /** Diagonal's own pop-up for a message that the system didn't pop up. */
     private void maybeShowBanner() {
         InfoHub.Notif n = info.notif;
-        if (n == null || !resumed || n.key.equals(lastBannerKey)) return;
-        lastBannerKey = n.key;
-        if (!NotifService.lastPostedIntercepted) return;   // the system already showed it
+        if (n == null || !resumed) return;
+        String stamp = n.key + "@" + NotifService.lastPostedAt;   // every new message, even in the same chat
+        if (stamp.equals(lastBannerKey)) return;
+        lastBannerKey = stamp;
+        if (!quietActive || !NotifService.lastPostedIntercepted) return;   // the system already showed it
         AppEntry app = appFor(n.pkg);
         int color = app != null ? app.color : 0xFF26262E;
         int ink = ColorExtractor.textColorFor(color);
@@ -922,13 +963,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         texts.addView(t1);
         if (!n.text.isEmpty()) texts.addView(t2);
         card.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        card.setOnClickListener(v -> { hideBanner(); onInfoClick(); });
+        final InfoHub.Notif shown = n;
+        card.setOnClickListener(v -> {
+            hideBanner();
+            boolean ok = false;
+            try { if (shown.intent != null) { InfoHub.sendAllowingStart(this, shown.intent); ok = true; } }
+            catch (Exception ignored) { }
+            if (!ok) { AppEntry a = appFor(shown.pkg); if (a != null) launch(a); }
+        });
         card.setElevation(8 * dp);
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP);
         int m = Math.round(10 * dp);
-        lp.setMargins(m, m + Math.round(8 * dp), m, 0);
+        lp.setMargins(m, m + Math.round(8 * dp) + topInset, m, 0);
         root.addView(card, lp);
         banner = card;
         card.setTranslationY(-200 * dp);
@@ -936,10 +984,18 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         // swipe it up to hide
         card.setOnTouchListener(new View.OnTouchListener() {
             float y0;
+            boolean gone;
             @Override public boolean onTouch(View v, android.view.MotionEvent e) {
-                if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) y0 = e.getRawY();
+                if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { y0 = e.getRawY(); gone = false; }
+                if (gone) return true;
                 if (e.getActionMasked() == android.view.MotionEvent.ACTION_MOVE && e.getRawY() - y0 < -24 * dp) {
-                    hideBanner();
+                    gone = true;
+                    v.setPressed(false);
+                    android.view.MotionEvent c = android.view.MotionEvent.obtain(e);
+                    c.setAction(android.view.MotionEvent.ACTION_CANCEL);
+                    v.onTouchEvent(c);
+                    c.recycle();
+                    hideBanner();          // swipe up = just hide, don't open
                     return true;
                 }
                 return false;

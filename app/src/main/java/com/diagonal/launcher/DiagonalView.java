@@ -37,7 +37,7 @@ public class DiagonalView extends View {
         void onLongPress(AppEntry app);
         void onInfoClick();
         void onInfoLongPress();
-        /** 0 previous, 1 play/pause, 2 next. */
+        /** 0 previous, 1 play/pause, 2 next, 3 back to the player (from the paused mini cover). */
         void onMusicControl(int which);
         /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
         void onCornerSwipe(int direction);
@@ -333,6 +333,7 @@ public class DiagonalView extends View {
         android.graphics.Bitmap icon;
         int text = 0xFFFFFFFF;
         boolean music, playing;
+        android.graphics.Bitmap mini;   // paused music: small cover + ▶ in the corner of the clock
     }
 
     private InfoContent infoNow = new InfoContent(), infoPrev;
@@ -355,7 +356,13 @@ public class DiagonalView extends View {
 
     public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor,
                         boolean music, boolean playing) {
+        setInfo(title, subtitle, icon, color, textColor, music, playing, null);
+    }
+
+    public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor,
+                        boolean music, boolean playing, android.graphics.Bitmap mini) {
         InfoContent n = new InfoContent();
+        n.mini = mini;
         n.title = title == null ? "" : title;
         n.sub = subtitle == null ? "" : subtitle;
         n.icon = icon;
@@ -363,7 +370,7 @@ public class DiagonalView extends View {
         n.music = music;
         n.playing = playing;
         boolean sameLook = n.title.equals(infoNow.title) && n.sub.equals(infoNow.sub) && n.icon == infoNow.icon
-                && n.music == infoNow.music && n.text == infoNow.text && color == infoColorTo;
+                && n.music == infoNow.music && n.text == infoNow.text && color == infoColorTo && n.mini == infoNow.mini;
         if (sameLook) {
             infoNow.playing = playing;
             invalidate();
@@ -430,6 +437,27 @@ public class DiagonalView extends View {
         float btn = 44 * dp, gap = 10 * dp;
 
         float blockL = left + iconGap, blockR = right - iconGap;
+        float miniS = 52 * dp;
+        if (!c.music && c.mini != null) {
+            // paused music: small cover with ▶ at the top end of the stripe
+            float mx = right - gap - miniS;
+            iconRect.set(mx, mid - miniS / 2f, mx + miniS, mid + miniS / 2f);
+            iconPaint.setAlpha(a);
+            canvas.save();
+            ctlPath.reset();
+            ctlPath.addRoundRect(iconRect, 12 * dp, 12 * dp, Path.Direction.CW);
+            canvas.clipPath(ctlPath);
+            canvas.drawBitmap(c.mini, null, iconRect, iconPaint);
+            canvas.restore();
+            iconPaint.setAlpha(255);
+            ctlPaint.setColor(0x99000000);
+            ctlPaint.setAlpha(Math.round(150 * alpha));
+            canvas.drawCircle(iconRect.centerX(), iconRect.centerY(), miniS * 0.3f, ctlPaint);
+            ctlPaint.setColor(0xFFFFFFFF);
+            ctlPaint.setAlpha(a);
+            drawPlayPause(canvas, iconRect.centerX() + 2 * dp, iconRect.centerY(), miniS * 0.22f, false);
+            blockR = mx - gap;
+        }
         if (c.music) {
             blockL = left + btn + 2 * gap;
             blockR = right - 2 * btn - 3 * gap;
@@ -551,7 +579,14 @@ public class DiagonalView extends View {
 
     /** Which music control is under a touch on the centre stripe: 0 prev, 1 play/pause, 2 next, −1 none. */
     private int musicControlAt(int index, float x, float y) {
-        if (!infoNow.music) return -1;
+        if (!infoNow.music) {
+            if (infoNow.mini == null) return -1;
+            float s0 = slotS(index);
+            visibleT(s0);
+            float tMin0 = tRange[0] + capMargin;
+            float t0 = (y - x) * INV_SQRT2;
+            return t0 - tMin0 >= 0 && t0 - tMin0 < 52 * dp + 24 * dp ? 3 : -1;   // the mini cover
+        }
         float s = slotS(index);
         visibleT(s);
         float tMin = tRange[0] + capMargin, tMax = tRange[1] - capMargin;
