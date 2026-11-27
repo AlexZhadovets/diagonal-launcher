@@ -79,7 +79,7 @@ public class QuickPanel extends View {
                 return true;
             }
         });
-        setVisibility(GONE);
+        setVisibility(INVISIBLE);   // laid out from the start, so the first swipe already has a size
     }
 
     public void setListener(Listener l) { listener = l; }
@@ -94,6 +94,7 @@ public class QuickPanel extends View {
 
     public void setLevel(int newLevel) {
         level = Math.max(0, Math.min(2, newLevel));
+        if (getWidth() == 0) { final int l = level; post(() -> setLevel(l)); return; }
         float target = level == 0 ? 0f : legsFor(level == 1 ? LEVEL1_TILES : tiles.size());
         if (level > 0) setVisibility(VISIBLE);
         if (anim != null) anim.cancel();
@@ -103,7 +104,7 @@ public class QuickPanel extends View {
         anim.addUpdateListener(a -> { legs = (float) a.getAnimatedValue(); invalidate(); });
         anim.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(android.animation.Animator a) {
-                if (level == 0) setVisibility(GONE);
+                if (level == 0) setVisibility(INVISIBLE);
             }
         });
         anim.start();
@@ -134,7 +135,10 @@ public class QuickPanel extends View {
             }
         }
         cells.sort((a, b) -> a[2] != b[2] ? Float.compare(a[2], b[2]) : Float.compare(a[3], b[3]));
-        if (level > 0) legs = legsFor(level == 1 ? LEVEL1_TILES : tiles.size());
+        if (level > 0) {
+            if (anim != null) anim.cancel();
+            legs = legsFor(level == 1 ? LEVEL1_TILES : tiles.size());
+        }
     }
 
     private float legsFor(int count) {

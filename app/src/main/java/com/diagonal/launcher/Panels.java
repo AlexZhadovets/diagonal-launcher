@@ -103,6 +103,8 @@ final class Panels {
         widgetList = new LinearLayout(act);
         widgetList.setOrientation(LinearLayout.VERTICAL);
         widgetList.setGravity(Gravity.BOTTOM);
+        // tap on empty space in the widget window = step back one level (full screen → peek → closed)
+        widgetList.setOnClickListener(v -> widgets.setLevel(widgets.level() - 1));
         int pad = Math.round(12 * dp);
         widgetList.setPadding(pad, pad, pad, pad);
         scroll.addView(widgetList, new FrameLayout.LayoutParams(
@@ -140,12 +142,19 @@ final class Panels {
                 Boolean flash = cm.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
                 if (Boolean.TRUE.equals(flash)) { torchId = id; break; }
             }
-            cm.registerTorchCallback(new CameraManager.TorchCallback() {
-                @Override public void onTorchModeChanged(String cameraId, boolean enabled) {
-                    if (cameraId.equals(torchId)) { torchOn = enabled; refreshTiles(); }
-                }
-            }, null);
+            cm.registerTorchCallback(torchCallback, null);
         } catch (Exception ignored) { }
+    }
+
+    private final CameraManager.TorchCallback torchCallback = new CameraManager.TorchCallback() {
+        @Override public void onTorchModeChanged(String cameraId, boolean enabled) {
+            if (cameraId.equals(torchId)) { torchOn = enabled; refreshTiles(); }
+        }
+    };
+
+    void onDestroy() {
+        try { act.getSystemService(CameraManager.class).unregisterTorchCallback(torchCallback); }
+        catch (RuntimeException ignored) { }
     }
 
     void setInsets(int top, int bottom) {
@@ -189,6 +198,13 @@ final class Panels {
             downInside = quick.contains(e.getX(), e.getY()) || widgets.contains(e.getX(), e.getY());
         }
         boolean swiped = outside.onTouchEvent(e);
+        if (swiped && downInside) {
+            MotionEvent cancel = MotionEvent.obtain(e);
+            cancel.setAction(MotionEvent.ACTION_CANCEL);
+            act.superDispatch(cancel);   // let the panel's own views finish their gesture
+            cancel.recycle();
+            return true;
+        }
         return !downInside || swiped; // outside touches never reach the stripes underneath
     }
 
@@ -408,6 +424,16 @@ final class Panels {
             remove.setOnClickListener(v -> removeWidget(id));
             card.addView(remove, new FrameLayout.LayoutParams(rs, rs, Gravity.TOP | Gravity.END));
             int h = Math.max(wi.minHeight, Math.round(120 * dp));
+            int wDp = Math.round((act.getResources().getDisplayMetrics().widthPixels - 24 * dp) / dp);
+            int hDp = Math.round(h / dp);
+            try {
+                Bundle opts = new Bundle();
+                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, wDp);
+                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, wDp);
+                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, hDp);
+                opts.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, hDp);
+                awm.updateAppWidgetOptions(id, opts);
+            } catch (RuntimeException ignored) { }
             widgetList.addView(card, cardLp(h));
         }
 
@@ -497,7 +523,7 @@ final class Panels {
             musicCard.setOnClickListener(v -> {
                 InfoHub.Media mm = info.media;
                 if (mm != null && mm.controller != null && mm.controller.getSessionActivity() != null) {
-                    try { mm.controller.getSessionActivity().send(); } catch (Exception ignored) { }
+                    try { InfoHub.sendAllowingStart(act, mm.controller.getSessionActivity()); } catch (Exception ignored) { }
                 }
             });
         }
@@ -531,12 +557,18 @@ final class Panels {
             return;
         }
         Collator collator = Collator.getInstance();
+        java.util.Map<String, String> appNames = new java.util.HashMap<>();
+        for (AppWidgetProviderInfo wi : list) {
+            String pkg = wi.provider.getPackageName();
+            if (!appNames.containsKey(pkg)) appNames.put(pkg, appLabel(wi));
+        }
+        list.sort((a, b) -> collator.compare(appNames.get(a.provider.getPackageName()),
+                appNames.get(b.provider.getPackageName())));
         List<String> labels = new ArrayList<>();
         List<AppWidgetProviderInfo> infos = new ArrayList<>();
-        list.sort((a, b) -> collator.compare(appLabel(a), appLabel(b)));
         for (AppWidgetProviderInfo wi : list) {
             String widgetName = wi.loadLabel(act.getPackageManager());
-            labels.add(appLabel(wi) + " — " + widgetName);
+            labels.add(appNames.get(wi.provider.getPackageName()) + " — " + widgetName);
             infos.add(wi);
         }
         act.showDialog(new AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)

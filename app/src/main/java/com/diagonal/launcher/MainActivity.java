@@ -151,6 +151,9 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
         panels = new Panels(this, root, info, prefs);
         buildSearch(root, dp);
+        // search pill below the panels (panels cover it), search layer stays on top
+        root.removeView(searchButton);
+        root.addView(searchButton, root.indexOfChild(panels.widgets), searchButton.getLayoutParams());
 
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             FrameLayout.LayoutParams sp = (FrameLayout.LayoutParams) searchButton.getLayoutParams();
@@ -223,6 +226,14 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         if (hasFocus) applySystemBars();
     }
 
+    boolean superDispatch(MotionEvent ev) { return super.dispatchTouchEvent(ev); }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == REQ_LOCATION) { info.resetWeather(); info.refresh(); }
+    }
+
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
         if (!isSearchOpen() && panels.dispatch(ev)) return true;
@@ -257,9 +268,20 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         InfoHub.Notif n = info.notif;
         if (m != null) {
             if (m.art != lastArt) {
-                lastArt = m.art;
-                lastArtScaled = m.art == null ? null : Bitmap.createScaledBitmap(m.art, 96, 96, true);
-                lastArtColor = lastArtScaled == null ? 0xFF26262E : ColorExtractor.analyze(lastArtScaled).color;
+                // new track art: scale + colour off the main thread, then redraw
+                final Bitmap art = m.art;
+                lastArt = art;
+                if (art == null) { lastArtScaled = null; lastArtColor = 0xFF26262E; }
+                else worker.execute(() -> {
+                    Bitmap scaled = Bitmap.createScaledBitmap(art, 96, 96, true);
+                    int col = ColorExtractor.analyze(scaled).color;
+                    main.post(() -> {
+                        if (lastArt != art) return;
+                        lastArtScaled = scaled;
+                        lastArtColor = col;
+                        updateInfoStripe();
+                    });
+                });
             }
             int c = lastArtColor;
             diagonal.setInfo(m.title, (m.playing ? "" : "⏸  ") + m.artist, lastArtScaled, c, ColorExtractor.textColorFor(c));
@@ -339,6 +361,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         final WallpaperManager wm = WallpaperManager.getInstance(getApplicationContext());
         worker.execute(() -> {
             try { wm.setBitmap(pic, null, true, WallpaperManager.FLAG_LOCK); } catch (Exception ignored) { }
+            pic.recycle();
         });
     }
 
@@ -367,6 +390,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     protected void onDestroy() {
         launcherApps.unregisterCallback(appsCallback);
         main.removeCallbacks(reload);
+        panels.onDestroy();
+        info.destroy();
         worker.shutdownNow();
         super.onDestroy();
     }
@@ -732,7 +757,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         all.addAll(usageSide);
         all.addAll(favs);
         all.addAll(alphaSide);
-        diagonal.setEmptyText(all.isEmpty() ? getString(R.string.no_apps) : "");
+        diagonal.setEmptyText(apps.isEmpty() ? getString(R.string.no_apps) : "");
         diagonal.setContent(all, usageSide.size(), favs.size(), recenter);
     }
 

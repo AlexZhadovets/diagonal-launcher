@@ -32,7 +32,7 @@ public class WidgetPanel extends FrameLayout {
         edge.setColor(0x33FFFFFF);
         edge.setStrokeWidth(1.5f * dp);
         setWillNotDraw(false);
-        setVisibility(GONE);
+        setVisibility(INVISIBLE);   // laid out from the start, so the first swipe already has a size
     }
 
     public int level() { return level; }
@@ -41,6 +41,7 @@ public class WidgetPanel extends FrameLayout {
 
     public void setLevel(int newLevel) {
         level = Math.max(0, Math.min(2, newLevel));
+        if (getWidth() == 0) { final int l = level; post(() -> setLevel(l)); return; }
         float target = level == 0 ? 0f : level == 1 ? getWidth() * 0.95f : getWidth() + getHeight() + 50 * dp;
         if (level > 0) setVisibility(VISIBLE);
         if (anim != null) anim.cancel();
@@ -50,10 +51,26 @@ public class WidgetPanel extends FrameLayout {
         anim.addUpdateListener(a -> { legs = (float) a.getAnimatedValue(); invalidate(); });
         anim.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(android.animation.Animator a) {
-                if (level == 0) setVisibility(GONE);
+                if (level == 0) setVisibility(INVISIBLE);
             }
         });
         anim.start();
+    }
+
+    /** A tap on empty panel space steps it back one level (the full-screen one has no "outside"). */
+    private final android.view.GestureDetector tapDetector = new android.view.GestureDetector(getContext(),
+            new android.view.GestureDetector.SimpleOnGestureListener() {
+                @Override public boolean onDown(MotionEvent e) { return true; }
+                @Override public boolean onSingleTapUp(MotionEvent e) { setLevel(level - 1); return true; }
+            });
+
+    @Override
+    protected void onSizeChanged(int w, int h, int ow, int oh) {
+        super.onSizeChanged(w, h, ow, oh);
+        if (level > 0 && ow > 0) {
+            if (anim != null) anim.cancel();
+            legs = level == 1 ? w * 0.95f : w + h + 50 * dp;
+        }
     }
 
     private void buildPath() {
@@ -84,7 +101,7 @@ public class WidgetPanel extends FrameLayout {
     }
 
     @Override
-    public boolean onTouchEvent(MotionEvent e) { return true; } // eat taps on empty panel space
+    public boolean onTouchEvent(MotionEvent e) { return tapDetector.onTouchEvent(e) || true; }
 
     static View spacer(Context c, int px) {
         View v = new View(c);

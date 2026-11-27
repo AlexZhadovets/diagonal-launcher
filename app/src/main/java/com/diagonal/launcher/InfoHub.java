@@ -74,7 +74,7 @@ final class InfoHub {
     Media media;
     Notif notif;
     String weather = "";       // e.g. "3° · Хмарно"
-    private long weatherAt;
+    private volatile long weatherAt;
     private long lastPlayingAt;
     private final Map<MediaController, MediaController.Callback> callbacks = new HashMap<>();
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
@@ -120,6 +120,10 @@ final class InfoHub {
         String s = Settings.Secure.getString(ctx.getContentResolver(), "enabled_notification_listeners");
         return s != null && s.contains(listenerCn.flattenToString());
     }
+
+    void destroy() { net.shutdownNow(); }
+
+    void resetWeather() { weatherAt = 0; }
 
     void refresh() {
         readMedia();
@@ -178,6 +182,7 @@ final class InfoHub {
     }
 
     private void readMedia() {
+        Media prev = media;
         media = null;
         if (!hasNotificationAccess()) return;
         if (sessionsListener == null && started) watchSessions();
@@ -188,18 +193,20 @@ final class InfoHub {
             return;
         }
         MediaController best = null;
+        MediaMetadata bestMd = null;
         boolean bestPlaying = false;
         for (MediaController c : list) {
             PlaybackState st = c.getPlaybackState();
             boolean playing = st != null && st.getState() == PlaybackState.STATE_PLAYING;
-            if (c.getMetadata() == null) continue;
-            if (best == null || (playing && !bestPlaying)) { best = c; bestPlaying = playing; }
+            MediaMetadata cmd = c.getMetadata();
+            if (cmd == null) continue;
+            if (best == null || (playing && !bestPlaying)) { best = c; bestMd = cmd; bestPlaying = playing; }
         }
         long now = System.currentTimeMillis();
         if (bestPlaying) lastPlayingAt = now;
         if (best == null || (!bestPlaying && now - lastPlayingAt > SHOW_PAUSED_MS)) return;
 
-        MediaMetadata md = best.getMetadata();
+        MediaMetadata md = bestMd;
         Media m = new Media();
         m.controller = best;
         m.pkg = best.getPackageName();
@@ -212,6 +219,11 @@ final class InfoHub {
         if (m.art == null) m.art = md.getBitmap(MediaMetadata.METADATA_KEY_ART);
         if (m.title == null) m.title = "";
         if (m.artist == null) m.artist = "";
+        // Keep the same Bitmap object for the same track, so callers can cache work on it.
+        if (prev != null && m.title.equals(prev.title) && m.artist.equals(prev.artist)
+                && m.pkg.equals(prev.pkg) && prev.art != null) {
+            m.art = prev.art;
+        }
         media = m;
     }
 
@@ -275,12 +287,22 @@ final class InfoHub {
         Notif n = notif;
         if (n == null) return;
         try {
-            if (n.intent != null) n.intent.send();
+            if (n.intent != null) sendAllowingStart(ctx, n.intent);
         } catch (PendingIntent.CanceledException ignored) { }
         NotifService svc = NotifService.instance;
         if (n.autoCancel && svc != null) {
             try { svc.cancelNotification(n.key); } catch (RuntimeException ignored) { }
         }
+    }
+
+    /** Android 14+ blocks activity starts from PendingIntents unless the sender opts in. */
+    static void sendAllowingStart(Context c, PendingIntent pi) throws PendingIntent.CanceledException {
+        Bundle o = null;
+        if (Build.VERSION.SDK_INT >= 34) {
+            o = android.app.ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(
+                    android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle();
+        }
+        pi.send(c, 0, null, null, null, null, o);
     }
 
     void dismissNotification() {
@@ -337,8 +359,10 @@ final class InfoHub {
             Location best = null;
             for (String p : new String[]{LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER,
                     LocationManager.GPS_PROVIDER}) {
-                Location l = lm.getLastKnownLocation(p);
-                if (l != null && (best == null || l.getTime() > best.getTime())) best = l;
+                try {
+                    Location l = lm.getLastKnownLocation(p);
+                    if (l != null && (best == null || l.getTime() > best.getTime())) best = l;
+                } catch (RuntimeException ignored) { }   // some providers need FINE location
             }
             if (best != null) return new double[]{best.getLatitude(), best.getLongitude()};
         } catch (RuntimeException ignored) { }

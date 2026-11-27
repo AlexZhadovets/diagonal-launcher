@@ -517,8 +517,14 @@ public class DiagonalView extends View {
         @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
             if (touchMode == 0) {
                 float tx = e2.getX() - downX, ty = e2.getY() - downY;
-                float along = Math.abs(tx - ty), across = Math.abs(tx + ty);
-                touchMode = along > across * 1.3f ? 2 : 1;
+                if (tx * tx + ty * ty < (24 * dp) * (24 * dp)) {
+                    // not sure yet: scroll a little anyway unless it clearly runs along the stripes
+                    float al = Math.abs(tx - ty), ac = Math.abs(tx + ty);
+                    if (al > ac * 2.4f) return true;
+                } else {
+                    float along = Math.abs(tx - ty), across = Math.abs(tx + ty);
+                    touchMode = along > across * 2.4f ? 2 : 1;   // within ±22° of the stripes
+                }
             }
             if (touchMode == 2) return true;   // swipe along the stripes: corner panel
             scroll += (dx + dy) * INV_SQRT2;
