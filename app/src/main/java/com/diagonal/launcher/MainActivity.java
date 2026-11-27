@@ -25,7 +25,14 @@ import android.os.Looper;
 import android.os.Process;
 import android.os.UserHandle;
 import android.provider.Settings;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
+import android.widget.ScrollView;
 import android.view.View;
 import android.view.Window;
 import android.widget.FrameLayout;
@@ -58,6 +65,10 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     private DiagonalView diagonal;
     private TextView backButton;
+    private TextView searchButton;
+    private FrameLayout searchLayer;
+    private EditText searchField;
+    private TileGridView searchGrid;
     private LauncherApps launcherApps;
     private SharedPreferences prefs;
     private int loadGeneration;
@@ -88,24 +99,28 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
         backButton = new TextView(this);
         backButton.setText("↩");
-        backButton.setTextSize(30);
-        backButton.setTextColor(0xFFFFFFFF);
+        backButton.setTextSize(16);
+        backButton.setTextColor(0x66FFFFFF);
         backButton.setGravity(Gravity.CENTER);
         backButton.setContentDescription(getString(R.string.back_to_default));
         GradientDrawable square = new GradientDrawable();
         square.setShape(GradientDrawable.RECTANGLE); // no rounding
-        square.setColor(0xE6202028);
-        square.setStroke(Math.round(1.5f * dp), 0x66FFFFFF);
+        square.setColor(0x22000000);                 // barely visible
         backButton.setBackground(square);
-        backButton.setElevation(6 * dp);
         backButton.setOnClickListener(v -> openDefaultLauncherSettings());
-        int size = Math.round(64 * dp);
+        int size = Math.round(32 * dp);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(size, size, Gravity.BOTTOM | Gravity.END);
-        int margin = Math.round(20 * dp);
+        int margin = Math.round(10 * dp);
         lp.setMargins(margin, margin, margin, margin);
         root.addView(backButton, lp);
 
+        buildSearch(root, dp);
+
         root.setOnApplyWindowInsetsListener((v, insets) -> {
+            FrameLayout.LayoutParams sp = (FrameLayout.LayoutParams) searchButton.getLayoutParams();
+            sp.topMargin = insets.getSystemWindowInsetTop() + Math.round(6 * dp);
+            searchButton.setLayoutParams(sp);
+            searchLayer.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom());
             FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) backButton.getLayoutParams();
             boolean rtl = v.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
             p.bottomMargin = margin + insets.getSystemWindowInsetBottom();
@@ -140,6 +155,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         // Every Home press brings back the 5 home apps in the middle.
         if (Intent.ACTION_MAIN.equals(intent.getAction()) && diagonal != null) {
             if (shownDialog != null && shownDialog.isShowing()) shownDialog.dismiss();
+            closeSearch();
             if (hasWindowFocus()) {
                 diagonal.animateToCenter();
             } else {
@@ -152,7 +168,118 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     @SuppressWarnings("deprecation")
     @Override
     public void onBackPressed() {
-        if (diagonal != null) diagonal.animateToCenter(); // Back = return to the middle
+        if (isSearchOpen()) closeSearch();
+        else if (diagonal != null) diagonal.animateToCenter(); // Back = return to the middle
+    }
+
+    // ---- search ---------------------------------------------------------
+
+    private void buildSearch(FrameLayout root, float dp) {
+        // Small, nearly transparent "search" pill at the top.
+        searchButton = new TextView(this);
+        searchButton.setText(R.string.search);
+        searchButton.setTextSize(13);
+        searchButton.setTextColor(0x88FFFFFF);
+        searchButton.setGravity(Gravity.CENTER);
+        searchButton.setPadding(Math.round(18 * dp), 0, Math.round(18 * dp), 0);
+        GradientDrawable pill = new GradientDrawable();
+        pill.setCornerRadius(16 * dp);
+        pill.setColor(0x33000000);
+        searchButton.setBackground(pill);
+        searchButton.setOnClickListener(v -> openSearch());
+        root.addView(searchButton, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, Math.round(32 * dp), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+
+        // Full-screen search layer: field on top, rounded tiles below.
+        searchLayer = new FrameLayout(this);
+        searchLayer.setBackgroundColor(0xF2101014);
+        searchLayer.setVisibility(View.GONE);
+        searchLayer.setClickable(true);
+
+        searchField = new EditText(this);
+        searchField.setHint(R.string.search_hint);
+        searchField.setHintTextColor(0x66FFFFFF);
+        searchField.setTextColor(0xFFFFFFFF);
+        searchField.setTextSize(20);
+        searchField.setSingleLine(true);
+        searchField.setImeOptions(EditorInfo.IME_ACTION_GO);
+        GradientDrawable fieldBg = new GradientDrawable();
+        fieldBg.setCornerRadius(18 * dp);
+        fieldBg.setColor(0x1FFFFFFF);
+        searchField.setBackground(fieldBg);
+        int pad = Math.round(16 * dp);
+        searchField.setPadding(pad, pad / 2, pad, pad / 2);
+        FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, Math.round(52 * dp), Gravity.TOP);
+        fp.setMargins(pad, pad, pad, 0);
+        searchLayer.addView(searchField, fp);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        searchGrid = new TileGridView(this);
+        searchGrid.setListener((app, v, b) -> { onLaunch(app, v, b); closeSearch(); });
+        scroll.addView(searchGrid);
+        FrameLayout.LayoutParams gp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        gp.topMargin = Math.round(52 * dp) + pad + Math.round(4 * dp);
+        gp.leftMargin = gp.rightMargin = Math.round(2 * dp);
+        searchLayer.addView(scroll, gp);
+
+        searchField.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) { filterSearch(s.toString()); }
+        });
+        searchField.setOnEditorActionListener((v, actionId, event) -> {
+            boolean go = actionId == EditorInfo.IME_ACTION_GO
+                    || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER);
+            AppEntry top = searchGrid.first();
+            if (go && top != null) {
+                Rect b = new Rect(0, 0, v.getWidth(), v.getHeight());
+                onLaunch(top, v, b);
+                closeSearch();
+                return true;
+            }
+            return false;
+        });
+
+        root.addView(searchLayer, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private boolean isSearchOpen() { return searchLayer != null && searchLayer.getVisibility() == View.VISIBLE; }
+
+    private void openSearch() {
+        searchField.setText("");
+        filterSearch("");
+        searchLayer.setAlpha(0f);
+        searchLayer.setVisibility(View.VISIBLE);
+        searchLayer.animate().alpha(1f).setDuration(150).start();
+        searchField.requestFocus();
+        searchField.post(() -> getSystemService(InputMethodManager.class)
+                .showSoftInput(searchField, InputMethodManager.SHOW_IMPLICIT));
+    }
+
+    private void closeSearch() {
+        if (!isSearchOpen()) return;
+        getSystemService(InputMethodManager.class).hideSoftInputFromWindow(searchField.getWindowToken(), 0);
+        searchLayer.setVisibility(View.GONE);
+    }
+
+    /** Names starting with the query first, then names containing it; A–Z inside each group. */
+    private void filterSearch(String query) {
+        String q = query.trim().toLowerCase();
+        Collator collator = Collator.getInstance();
+        List<AppEntry> starts = new ArrayList<>(), contains = new ArrayList<>();
+        for (AppEntry a : allApps) {
+            String l = a.label.toLowerCase();
+            if (q.isEmpty() || l.startsWith(q)) starts.add(a);
+            else if (l.contains(q)) contains.add(a);
+        }
+        starts.sort((a, b) -> collator.compare(a.label, b.label));
+        contains.sort((a, b) -> collator.compare(a.label, b.label));
+        starts.addAll(contains);
+        searchGrid.setApps(starts);
     }
 
     @SuppressWarnings("deprecation")
@@ -445,8 +572,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 Drawable d = info.getIcon(0);
                 if (d == null) d = getPackageManager().getDefaultActivityIcon();
                 Bitmap icon = toBitmap(d, iconPx);
-                int color = ColorExtractor.dominantColor(icon);
-                list.add(new AppEntry(cn, label, icon, color, ColorExtractor.textColorFor(color)));
+                ColorExtractor.Result r = ColorExtractor.analyze(icon);
+                list.add(new AppEntry(cn, label, r.glyph, r.color, r.textColor));
             } catch (RuntimeException | OutOfMemoryError e) {
                 // Broken icon: still show the app, just without an icon.
                 list.add(new AppEntry(cn, label, null, 0xFF808080, 0xFFFFFFFF));

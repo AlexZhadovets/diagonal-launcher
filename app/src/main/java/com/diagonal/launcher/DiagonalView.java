@@ -51,6 +51,7 @@ public class DiagonalView extends View {
 
     private final Paint bandPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint dividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint seamPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final TextPaint textPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint hintPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
@@ -211,6 +212,16 @@ public class DiagonalView extends View {
         canvas.save();
         canvas.rotate(45f);
         for (int i = first; i <= last; i++) drawStripe(canvas, items.get(i), slotS(i));
+        // Thin, slightly greyer seam where two neighbouring stripes have the same colour.
+        float far = S * 2f, seam = 2.5f * dp;
+        for (int i = first; i < last; i++) {
+            int a = items.get(i).color, b = items.get(i + 1).color;
+            if (ColorExtractor.dist(a, b) > 60) continue;
+            float s = (i + 1) * spacing - scroll;
+            seamPaint.setColor(ColorExtractor.seamColor(a));
+            tmpRect.set(s - seam / 2f, -far, s + seam / 2f, far);
+            canvas.drawRect(tmpRect, seamPaint);
+        }
         canvas.restore();
     }
 

@@ -17,4 +17,6 @@
     <string name="unpin">Прибрати з головного екрана</string>
     <string name="app_info">Про програму</string>
     <string name="uninstall">Видалити програму</string>
+    <string name="search">Пошук</string>
+    <string name="search_hint">Знайти програму</string>
 </resources>
