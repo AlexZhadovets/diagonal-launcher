@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Діагональ</string>
+    <string name="back_to_default">Повернутись до стандартного робочого столу</string>
+    <string name="no_apps">Немає програм</string>
+    <string name="loading">Завантаження…</string>
+    <string name="cannot_open">Не вдалося відкрити програму</string>
+    <string name="hint_default">Обери інший лаунчер у налаштуваннях «Головний екран»</string>
+</resources>
