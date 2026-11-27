@@ -14,13 +14,14 @@ android {
         versionName '1.0'
     }
 
-    // Fixed key so every new build installs over the previous one (personal sideload use only).
+    // Release key comes from GitHub Secrets (decoded by the workflow into app/release.jks).
+    // Nothing secret is stored in the repository.
     signingConfigs {
         fixed {
-            storeFile file('signing.jks')
-            storePassword 'diagonal123'
+            storeFile file('release.jks')
+            storePassword System.getenv('SIGNING_PASSWORD') ?: ''
             keyAlias 'diagonal'
-            keyPassword 'diagonal123'
+            keyPassword System.getenv('SIGNING_PASSWORD') ?: ''
         }
     }
 

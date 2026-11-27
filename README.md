@@ -25,7 +25,16 @@ An Android home screen (launcher) where every app is a big coloured diagonal str
 2. Allow your browser or file manager to “install unknown apps”, then install the APK.
 3. Press Home, choose **Diagonal**, then **Always**. You can also set it in Settings → Apps → Default apps → Home app.
 
-New builds install over the old one. The APK is signed with a fixed test key that is kept in this repository (`app/signing.jks`). That makes updates easy, but it also means anyone could sign an APK with the same key, so only install builds from this repository.
+New builds install over the old one, because they are all signed with the same release key.
+
+### Signing (for forks)
+
+The release key is not in the repository. The workflow reads it from two GitHub Actions secrets (Settings → Secrets and variables → Actions):
+
+- `SIGNING_KEYSTORE_BASE64`: your keystore file, base64-encoded (`base64 -w0 release.jks`). The key alias must be `diagonal`.
+- `SIGNING_PASSWORD`: the password of the keystore and the key.
+
+To make a key: `keytool -genkeypair -keystore release.jks -storetype PKCS12 -alias diagonal -keyalg RSA -keysize 3072 -validity 10000`.
 
 ## Permissions
 
