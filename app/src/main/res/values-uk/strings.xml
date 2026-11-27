@@ -89,4 +89,5 @@
     <string name="set_quick_one">Швидкі налаштування: повністю одним свайпом</string>
     <string name="set_widgets_one">Віджети: повністю одним свайпом</string>
     <string name="set_swap_swipes">Поміняти два свайпи місцями</string>
+    <string name="reply_hint">Відповісти…</string>
 </resources>

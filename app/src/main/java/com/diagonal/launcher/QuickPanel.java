@@ -147,6 +147,22 @@ public class QuickPanel extends View {
 
     public int level() { return level; }
 
+    public float legs() { return legs; }
+
+    /** Where the tile block ends (the notification list starts below it). */
+    public float tilesEnd() { return tilesBottom(); }
+
+    private boolean hasNotifications;
+    private Runnable onShapeChange;
+
+    public void setOnShapeChange(Runnable r) { onShapeChange = r; }
+
+    public void setHasNotifications(boolean has) {
+        if (has == hasNotifications) return;
+        hasNotifications = has;
+        if (level == 2) animateTo(bigLegs());
+    }
+
     public boolean contains(float x, float y) { return level > 0 && (getWidth() - x) + y <= legs; }
 
     public void setLevel(int newLevel) {
@@ -159,7 +175,7 @@ public class QuickPanel extends View {
         anim = ValueAnimator.ofFloat(legs, target);
         anim.setDuration(level == 2 ? 320 : 260);
         anim.setInterpolator(new DecelerateInterpolator());
-        anim.addUpdateListener(a -> { legs = (float) a.getAnimatedValue(); invalidate(); });
+        anim.addUpdateListener(a -> { legs = (float) a.getAnimatedValue(); invalidate(); if (onShapeChange != null) onShapeChange.run(); });
         anim.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(android.animation.Animator a) {
                 if (level == 0) setVisibility(INVISIBLE);
@@ -174,7 +190,7 @@ public class QuickPanel extends View {
         anim = ValueAnimator.ofFloat(legs, target);
         anim.setDuration(220);
         anim.setInterpolator(new DecelerateInterpolator());
-        anim.addUpdateListener(a -> { legs = (float) a.getAnimatedValue(); invalidate(); });
+        anim.addUpdateListener(a -> { legs = (float) a.getAnimatedValue(); invalidate(); if (onShapeChange != null) onShapeChange.run(); });
         anim.start();
     }
 
@@ -226,9 +242,9 @@ public class QuickPanel extends View {
     /** Big triangle: tile block, then 3 text rows; the edge must pass below the last full-width row. */
     private float bigLegs() {
         float tilesOnly = legsFor(tiles.size());
-        if (rows.isEmpty()) return tilesOnly;
-        // the edge passes just under the tiles on the left, so rows below shrink along it
-        return Math.max(tilesOnly, getWidth() + tilesBottom() + 48 * dp);
+        if (!hasNotifications) return tilesOnly;
+        // like the Android shade: room for the list, the diagonal edge only cuts the far corner
+        return Math.max(tilesOnly, getWidth() + getHeight() * 0.9f);
     }
 
     // ---- touch ------------------------------------------------------------
@@ -326,7 +342,7 @@ public class QuickPanel extends View {
             CharSequence l = TextUtils.ellipsize(t.label, label, cell - 4 * dp, TextUtils.TruncateAt.END);
             canvas.drawText(l, 0, l.length(), c[0], c[1] + radius + 14 * dp, label);
         }
-        if (level != 1) drawNotifications(canvas, w);
+        if (onShapeChange != null) onShapeChange.run();
     }
 
     /** Two apps in the free corners of the small triangle. */

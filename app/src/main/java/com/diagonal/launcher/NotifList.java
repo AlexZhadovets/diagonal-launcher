@@ -1,0 +1,484 @@
+package com.diagonal.launcher;
+
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.app.Notification;
+import android.app.PendingIntent;
+import android.app.RemoteInput;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Path;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Bundle;
+import android.text.TextUtils;
+import android.text.format.DateUtils;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.VelocityTracker;
+import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The notification list in the big quick-settings triangle, working like the Android shade:
+ * grouped by app, swipe sideways to dismiss, tap to open, chevron to expand long text and the
+ * action buttons, inline reply for messengers, "Clear all" at the end.
+ * It is clipped by the triangle's diagonal edge.
+ */
+public class NotifList extends ScrollView {
+
+    public interface Host {
+        AppEntry appFor(String pkg);
+        void open(Item item);
+        void dismiss(List<Item> items);
+        void clearAll();
+        String clearLabel();
+        String replyHint();
+    }
+
+    public static final class Item {
+        String key, pkg, title, text, big;
+        long when;
+        PendingIntent intent;
+        boolean autoCancel;
+        Bitmap large;
+        final List<Action> actions = new ArrayList<>();
+    }
+
+    public static final class Action {
+        CharSequence title;
+        PendingIntent intent;
+        RemoteInput[] inputs;
+    }
+
+    private final float dp;
+    private final LinearLayout column;
+    private final Path clip = new Path();
+    private final Host host;
+    private QuickPanel shape;           // where the triangle edge is
+    private float topOnScreen;
+    private final java.util.Set<String> expanded = new java.util.HashSet<>();
+
+    public NotifList(Context c, Host host) {
+        super(c);
+        this.host = host;
+        dp = getResources().getDisplayMetrics().density;
+        setVerticalScrollBarEnabled(false);
+        setOverScrollMode(OVER_SCROLL_NEVER);
+        column = new LinearLayout(c);
+        column.setOrientation(LinearLayout.VERTICAL);
+        int p = Math.round(12 * dp);
+        column.setPadding(p, Math.round(4 * dp), p, Math.round(200 * dp));
+        addView(column);
+        setVisibility(GONE);
+    }
+
+    void attachShape(QuickPanel q) { shape = q; }
+
+    void setTopOnScreen(float y) { topOnScreen = y; invalidate(); }
+
+    // ---- clipping to the triangle --------------------------------------
+
+    /** Inside the triangle: (width − x) + screenY ≤ legs. */
+    private boolean inside(float x, float yInView) {
+        if (shape == null) return true;
+        return (getWidth() - x) + topOnScreen + yInView <= shape.legs();
+    }
+
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        if (shape == null) { super.dispatchDraw(canvas); return; }
+        float w = getWidth();
+        float k = shape.legs() - w - topOnScreen + getScrollY();   // content y of the edge at x = 0
+        clip.reset();
+        clip.moveTo(0, getScrollY() - 10);
+        clip.lineTo(w, getScrollY() - 10);
+        clip.lineTo(w, w + k);
+        clip.lineTo(0, k);
+        clip.close();
+        canvas.save();
+        canvas.clipPath(clip);
+        super.dispatchDraw(canvas);
+        canvas.restore();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent e) {
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN && !inside(e.getX(), e.getY())) return false;
+        return super.dispatchTouchEvent(e);
+    }
+
+    // ---- content -----------------------------------------------------------
+
+    void setItems(List<Item> items) {
+        column.removeAllViews();
+        Map<String, List<Item>> groups = new LinkedHashMap<>();
+        for (Item it : items) {
+            List<Item> g = groups.get(it.pkg);
+            if (g == null) { g = new ArrayList<>(); groups.put(it.pkg, g); }
+            g.add(it);
+        }
+        for (List<Item> g : groups.values()) column.addView(groupView(g));
+        if (!items.isEmpty()) {
+            TextView clear = text(13, 0xFFFFFFFF, true);
+            clear.setText(host.clearLabel());
+            clear.setGravity(Gravity.CENTER);
+            int hp = Math.round(16 * dp);
+            clear.setPadding(hp, 0, hp, 0);
+            GradientDrawable b = new GradientDrawable();
+            b.setCornerRadius(18 * dp);
+            b.setColor(0xFF2A2A31);
+            clear.setBackground(b);
+            clear.setOnClickListener(v -> host.clearAll());
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Math.round(36 * dp));
+            lp.gravity = Gravity.END;
+            lp.topMargin = Math.round(4 * dp);
+            column.addView(clear, lp);
+        }
+        invalidate();
+    }
+
+    private TextView text(float sp, int color, boolean bold) {
+        TextView t = new TextView(getContext());
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.END);
+        if (bold) t.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        return t;
+    }
+
+    /** One app's notifications in one card (like an Android notification group). */
+    private View groupView(List<Item> group) {
+        Item head = group.get(0);
+        AppEntry app = host.appFor(head.pkg);
+        int accent = app != null ? app.color : 0xFF8888AA;
+        boolean open = expanded.contains(head.pkg);
+        boolean expandable = group.size() > 1 || hasMore(head);
+
+        SlantCard card = new SlantCard(getContext(), 0xFF1C1C23);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int p = Math.round(12 * dp);
+        card.setPadding(p, Math.round(10 * dp), p, Math.round(10 * dp));
+        card.setCut(Math.round(14 * dp));   // small diagonal corner, the launcher's mark
+
+        // header: app stripe · name · time · chevron
+        LinearLayout header = new LinearLayout(getContext());
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        AppTileView tile = new AppTileView(getContext(), app);
+        int th = Math.round(18 * dp);
+        header.addView(tile, new LinearLayout.LayoutParams(Math.round(th * 1.6f), th));
+        TextView name = text(12, accent == 0xFF16161C ? 0xFFFFFFFF : lighten(accent), true);
+        name.setText((app != null ? app.label : head.pkg) + "  ·  " + ago(head.when)
+                + (group.size() > 1 && !open ? "  ·  " + group.size() : ""));
+        name.setPadding(Math.round(8 * dp), 0, 0, 0);
+        header.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (expandable) {
+            TextView chev = text(16, 0xCCFFFFFF, true);
+            chev.setText(open ? "⌃" : "⌄");
+            chev.setGravity(Gravity.CENTER);
+            int cs = Math.round(32 * dp);
+            chev.setOnClickListener(v -> {
+                if (expanded.contains(head.pkg)) expanded.remove(head.pkg); else expanded.add(head.pkg);
+                int i = column.indexOfChild(swipeParent(card));
+                column.removeViewAt(i);
+                column.addView(groupView(group), i);
+            });
+            header.addView(chev, new LinearLayout.LayoutParams(cs, cs));
+        }
+        card.addView(header);
+
+        int show = open ? group.size() : Math.min(group.size(), 2);
+        for (int k = 0; k < show; k++) card.addView(entryView(group.get(k), open, accent));
+        if (!open && group.size() > 2) {
+            TextView more = text(12, 0x99FFFFFF, false);
+            more.setText("+" + (group.size() - 2));
+            more.setPadding(0, Math.round(4 * dp), 0, 0);
+            card.addView(more);
+        }
+
+        Swipe swipe = new Swipe(getContext(), () -> host.dismiss(group));
+        swipe.addView(card);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = Math.round(8 * dp);
+        swipe.setLayoutParams(lp);
+        return swipe;
+    }
+
+    private static View swipeParent(View card) { return (View) card.getParent(); }
+
+    private boolean hasMore(Item it) { return !it.actions.isEmpty() || (it.big != null && !it.big.equals(it.text)); }
+
+    private View entryView(Item it, boolean open, int accent) {
+        LinearLayout box = new LinearLayout(getContext());
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, Math.round(6 * dp), 0, 0);
+
+        LinearLayout row = new LinearLayout(getContext());
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout texts = new LinearLayout(getContext());
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(14, 0xFFFFFFFF, true);
+        title.setText(it.title);
+        TextView body = text(13, 0xCCFFFFFF, false);
+        String b = open && it.big != null ? it.big : it.text;
+        body.setText(b);
+        if (open) { body.setSingleLine(false); body.setMaxLines(8); }
+        texts.addView(title);
+        if (b != null && !b.isEmpty()) texts.addView(body);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (it.large != null) {
+            ImageView iv = new ImageView(getContext());
+            iv.setImageBitmap(it.large);
+            int s = Math.round(36 * dp);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(s, s);
+            lp.leftMargin = Math.round(8 * dp);
+            row.addView(iv, lp);
+        }
+        box.addView(row);
+        box.setOnClickListener(v -> host.open(it));
+
+        if (open && !it.actions.isEmpty()) {
+            LinearLayout acts = new LinearLayout(getContext());
+            acts.setPadding(0, Math.round(6 * dp), 0, 0);
+            for (Action a : it.actions) {
+                TextView btn = text(13, lighten(accent), true);
+                btn.setText(a.title);
+                int hp = Math.round(10 * dp);
+                btn.setPadding(hp, Math.round(6 * dp), hp, Math.round(6 * dp));
+                btn.setOnClickListener(v -> {
+                    if (a.inputs != null && a.inputs.length > 0) showReply(box, acts, it, a, accent);
+                    else send(a.intent, null);
+                });
+                acts.addView(btn);
+            }
+            box.addView(acts);
+        }
+        return box;
+    }
+
+    /** Inline reply, like in the Android shade. */
+    private void showReply(LinearLayout box, View actions, Item it, Action a, int accent) {
+        actions.setVisibility(GONE);
+        LinearLayout reply = new LinearLayout(getContext());
+        reply.setGravity(Gravity.CENTER_VERTICAL);
+        reply.setPadding(0, Math.round(6 * dp), 0, 0);
+        EditText field = new EditText(getContext());
+        field.setHint(host.replyHint());
+        field.setHintTextColor(0x66FFFFFF);
+        field.setTextColor(0xFFFFFFFF);
+        field.setTextSize(14);
+        field.setSingleLine(true);
+        field.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        GradientDrawable fb = new GradientDrawable();
+        fb.setCornerRadius(16 * dp);
+        fb.setColor(0xFF2A2A31);
+        field.setBackground(fb);
+        int hp = Math.round(12 * dp);
+        field.setPadding(hp, Math.round(8 * dp), hp, Math.round(8 * dp));
+        reply.addView(field, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView sendBtn = text(18, lighten(accent), true);
+        sendBtn.setText("➤");
+        sendBtn.setGravity(Gravity.CENTER);
+        int s = Math.round(40 * dp);
+        reply.addView(sendBtn, new LinearLayout.LayoutParams(s, s));
+        Runnable go = () -> {
+            String msg = field.getText().toString().trim();
+            if (msg.isEmpty()) return;
+            Bundle results = new Bundle();
+            for (RemoteInput ri : a.inputs) results.putCharSequence(ri.getResultKey(), msg);
+            Intent fill = new Intent();
+            RemoteInput.addResultsToIntent(a.inputs, fill, results);
+            send(a.intent, fill);
+            hideKeyboard(field);
+            reply.setVisibility(GONE);
+            actions.setVisibility(VISIBLE);
+        };
+        sendBtn.setOnClickListener(v -> go.run());
+        field.setOnEditorActionListener((v, id, ev) -> { go.run(); return true; });
+        box.addView(reply);
+        field.requestFocus();
+        field.post(() -> getContext().getSystemService(android.view.inputmethod.InputMethodManager.class)
+                .showSoftInput(field, 0));
+    }
+
+    private void hideKeyboard(View v) {
+        getContext().getSystemService(android.view.inputmethod.InputMethodManager.class)
+                .hideSoftInputFromWindow(v.getWindowToken(), 0);
+    }
+
+    private void send(PendingIntent pi, Intent fill) {
+        if (pi == null) return;
+        try {
+            Bundle o = null;
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                o = android.app.ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(
+                        android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle();
+            }
+            pi.send(getContext(), 0, fill, null, null, null, o);
+        } catch (PendingIntent.CanceledException ignored) { }
+    }
+
+    private static String ago(long when) {
+        return DateUtils.getRelativeTimeSpanString(when, System.currentTimeMillis(),
+                DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString();
+    }
+
+    /** The app colour made readable on the dark card. */
+    private static int lighten(int c) {
+        float[] hsv = new float[3];
+        android.graphics.Color.colorToHSV(c, hsv);
+        if (hsv[2] < 0.75f) hsv[2] = 0.75f;
+        if (hsv[1] > 0.75f) hsv[1] = 0.75f;
+        return android.graphics.Color.HSVToColor(hsv);
+    }
+
+    /** Build an Item from a status-bar notification. */
+    static Item from(Context ctx, android.service.notification.StatusBarNotification sbn) {
+        Notification n = sbn.getNotification();
+        Bundle ex = n.extras;
+        Item it = new Item();
+        it.key = sbn.getKey();
+        it.pkg = sbn.getPackageName();
+        it.when = n.when != 0 ? n.when : sbn.getPostTime();
+        it.intent = n.contentIntent;
+        it.autoCancel = (n.flags & Notification.FLAG_AUTO_CANCEL) != 0;
+        CharSequence t = ex == null ? null : ex.getCharSequence(Notification.EXTRA_TITLE);
+        CharSequence x = ex == null ? null : ex.getCharSequence(Notification.EXTRA_TEXT);
+        CharSequence big = ex == null ? null : ex.getCharSequence(Notification.EXTRA_BIG_TEXT);
+        it.title = t == null ? "" : t.toString();
+        it.text = x == null ? "" : x.toString();
+        it.big = big == null ? null : big.toString();
+        if (n.actions != null) {
+            for (Notification.Action a : n.actions) {
+                if (a == null || a.title == null || a.actionIntent == null) continue;
+                Action act = new Action();
+                act.title = a.title;
+                act.intent = a.actionIntent;
+                act.inputs = a.getRemoteInputs();
+                it.actions.add(act);
+            }
+        }
+        try {
+            android.graphics.drawable.Icon li = n.getLargeIcon();
+            if (li != null) {
+                android.graphics.drawable.Drawable d = li.loadDrawable(ctx);
+                if (d != null) {
+                    int px = Math.round(36 * ctx.getResources().getDisplayMetrics().density);
+                    Bitmap bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888);
+                    Canvas c = new Canvas(bmp);
+                    Path circle = new Path();
+                    circle.addCircle(px / 2f, px / 2f, px / 2f, Path.Direction.CW);
+                    c.clipPath(circle);
+                    d.setBounds(0, 0, px, px);
+                    d.draw(c);
+                    it.large = bmp;
+                }
+            }
+        } catch (RuntimeException ignored) { }
+        return it;
+    }
+
+    /** Swipe sideways to dismiss, like in the shade. */
+    private static final class Swipe extends FrameLayout {
+        private final Runnable onDismiss;
+        private final int slop;
+        private float downX, downY;
+        private boolean dragging;
+        private VelocityTracker vt;
+
+        Swipe(Context c, Runnable onDismiss) {
+            super(c);
+            this.onDismiss = onDismiss;
+            slop = ViewConfiguration.get(c).getScaledTouchSlop();
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent e) {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downX = e.getRawX();
+                    downY = e.getRawY();
+                    dragging = false;
+                    if (vt != null) vt.recycle();
+                    vt = VelocityTracker.obtain();
+                    vt.addMovement(e);
+                    return false;
+                case MotionEvent.ACTION_MOVE:
+                    float dx = e.getRawX() - downX, dy = e.getRawY() - downY;
+                    if (vt != null) vt.addMovement(e);
+                    if (Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+                        dragging = true;
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                downX = e.getRawX();
+                downY = e.getRawY();
+                dragging = false;
+                if (vt != null) vt.recycle();
+                vt = VelocityTracker.obtain();
+            }
+            if (vt != null) vt.addMovement(e);
+            float dx = e.getRawX() - downX;
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_MOVE:
+                    if (!dragging && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(e.getRawY() - downY) * 1.5f) {
+                        dragging = true;
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    }
+                    if (dragging) {
+                        setTranslationX(dx);
+                        setAlpha(Math.max(0.2f, 1f - Math.abs(dx) / getWidth()));
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    float v = 0;
+                    if (vt != null) { vt.computeCurrentVelocity(1000); v = vt.getXVelocity(); vt.recycle(); vt = null; }
+                    boolean gone = dragging && (Math.abs(dx) > getWidth() * 0.35f
+                            || (Math.abs(v) > 1200 && Math.signum(v) == Math.signum(dx)));
+                    if (gone) {
+                        animate().translationX(Math.signum(dx) * getWidth()).alpha(0f).setDuration(180)
+                                .setListener(new AnimatorListenerAdapter() {
+                                    @Override public void onAnimationEnd(Animator a) {
+                                        setVisibility(GONE);
+                                        onDismiss.run();
+                                    }
+                                }).start();
+                    } else {
+                        animate().translationX(0).alpha(1f).setDuration(160).setListener(null).start();
+                    }
+                    dragging = false;
+                    return true;
+                default:
+                    return true;
+            }
+        }
+    }
+}

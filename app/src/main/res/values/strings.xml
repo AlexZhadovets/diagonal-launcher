@@ -89,4 +89,5 @@
     <string name="set_quick_one">Quick settings: open fully with one swipe</string>
     <string name="set_widgets_one">Widgets: open fully with one swipe</string>
     <string name="set_swap_swipes">Swap the two swipes</string>
+    <string name="reply_hint">Reply…</string>
 </resources>

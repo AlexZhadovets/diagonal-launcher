@@ -114,12 +114,13 @@ final class Panels {
                     quick.setApps(act.quickApps());
                 });
             }
-            @Override public void onNotification(QuickPanel.Row r) { openRow(r); }
+            @Override public void onNotification(QuickPanel.Row r) { }
             @Override public void onClearNotifications() { clearNotifications(); }
         });
         root.addView(quick, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         buildTiles();
+        buildNotifList(root);
 
         outside = new GestureDetector(act, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onSingleTapUp(MotionEvent e) {
@@ -220,15 +221,56 @@ final class Panels {
         return !downInside; // touches outside never reach the stripes underneath
     }
 
-    // ---- notifications in the big triangle -------------------------------
+    // ---- notifications in the big triangle (Android-style list) ----------
+
+    NotifList notifList;
+    private String notifSignature = "";
+
+    private void buildNotifList(FrameLayout root) {
+        notifList = new NotifList(act, new NotifList.Host() {
+            @Override public AppEntry appFor(String pkg) { return act.appFor(pkg); }
+            @Override public void open(NotifList.Item it) {
+                closeAll();
+                try { if (it.intent != null) InfoHub.sendAllowingStart(act, it.intent); } catch (Exception ignored) { }
+                NotifService svc = NotifService.instance;
+                if (it.autoCancel && svc != null) {
+                    try { svc.cancelNotification(it.key); } catch (RuntimeException ignored) { }
+                }
+            }
+            @Override public void dismiss(List<NotifList.Item> items) {
+                NotifService svc = NotifService.instance;
+                if (svc == null) return;
+                for (NotifList.Item it : items) {
+                    try { svc.cancelNotification(it.key); } catch (RuntimeException ignored) { }
+                }
+            }
+            @Override public void clearAll() { clearNotifications(); }
+            @Override public String clearLabel() { return act.getString(R.string.clear_all); }
+            @Override public String replyHint() { return act.getString(R.string.reply_hint); }
+        });
+        notifList.attachShape(quick);
+        quick.setOnShapeChange(() -> {
+            boolean show = quick.level() == 2;
+            if (show != (notifList.getVisibility() == View.VISIBLE)) notifList.setVisibility(show ? View.VISIBLE : View.GONE);
+            if (show) {
+                int top = Math.round(quick.tilesEnd());
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) notifList.getLayoutParams();
+                if (lp.topMargin != top) { lp.topMargin = top; notifList.setLayoutParams(lp); }
+                notifList.setTopOnScreen(top);
+            }
+        });
+        root.addView(notifList, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
 
     void refreshNotifications() {
-        List<QuickPanel.Row> out = new ArrayList<>();
+        List<NotifList.Item> out = new ArrayList<>();
         NotifService svc = NotifService.instance;
         android.service.notification.StatusBarNotification[] all = null;
         if (svc != null) {
             try { all = svc.getActiveNotifications(); } catch (RuntimeException ignored) { }
         }
+        StringBuilder sig = new StringBuilder();
         if (all != null) {
             List<android.service.notification.StatusBarNotification> list = new ArrayList<>();
             for (android.service.notification.StatusBarNotification sbn : all) {
@@ -240,33 +282,17 @@ final class Panels {
             }
             list.sort((a, b) -> Long.compare(b.getPostTime(), a.getPostTime()));
             for (android.service.notification.StatusBarNotification sbn : list) {
-                android.app.Notification n = sbn.getNotification();
-                CharSequence t = n.extras == null ? null : n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE);
-                CharSequence x = n.extras == null ? null : n.extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
-                if ((t == null || t.length() == 0) && (x == null || x.length() == 0)) continue;
-                AppEntry app = act.appFor(sbn.getPackageName());
-                QuickPanel.Row r = new QuickPanel.Row();
-                r.title = t == null ? (app != null ? app.label : "") : t.toString();
-                r.text = x == null ? "" : x.toString();
-                r.key = sbn.getKey();
-                r.intent = n.contentIntent;
-                r.autoCancel = (n.flags & android.app.Notification.FLAG_AUTO_CANCEL) != 0;
-                r.color = app != null ? app.color : 0xFF2A2A31;
-                r.ink = app != null ? app.textColor : 0xFFFFFFFF;
-                r.icon = app != null ? app.icon : null;
-                r.filter = app != null ? app.iconFilter() : null;
-                out.add(r);
+                NotifList.Item it = NotifList.from(act, sbn);
+                if (it.title.isEmpty() && it.text.isEmpty()) continue;
+                out.add(it);
+                sig.append(it.key).append('@').append(sbn.getPostTime()).append(';');
             }
         }
-        quick.setNotifications(out, act.getString(R.string.clear_all));
-    }
-
-    private void openRow(QuickPanel.Row r) {
-        closeAll();
-        try { if (r.intent != null) InfoHub.sendAllowingStart(act, r.intent); } catch (Exception ignored) { }
-        NotifService svc = NotifService.instance;
-        if (r.autoCancel && svc != null) {
-            try { svc.cancelNotification(r.key); } catch (RuntimeException ignored) { }
+        quick.setHasNotifications(!out.isEmpty());
+        String s = sig.toString();
+        if (!s.equals(notifSignature)) {      // don't rebuild (and lose a reply being typed) for no reason
+            notifSignature = s;
+            notifList.setItems(out);
         }
     }
 
@@ -275,7 +301,9 @@ final class Panels {
         if (svc != null) {
             try { svc.cancelAllNotifications(); } catch (RuntimeException ignored) { }
         }
-        quick.setNotifications(new ArrayList<>(), act.getString(R.string.clear_all));
+        notifSignature = "";
+        notifList.setItems(new ArrayList<>());
+        quick.setHasNotifications(false);
     }
 
     // ---- quick settings -------------------------------------------------
