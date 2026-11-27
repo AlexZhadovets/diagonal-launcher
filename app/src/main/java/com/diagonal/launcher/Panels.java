@@ -235,7 +235,9 @@ final class Panels {
             @Override public AppEntry appFor(String pkg) { return act.appFor(pkg); }
             @Override public void open(NotifList.Item it) {
                 closeAll();
-                try { if (it.intent != null) InfoHub.sendAllowingStart(act, it.intent); } catch (Exception ignored) { }
+                boolean ok = false;
+                try { if (it.intent != null) { InfoHub.sendAllowingStart(act, it.intent); ok = true; } } catch (Exception ignored) { }
+                if (!ok) { AppEntry a = act.appFor(it.pkg); if (a != null) act.launch(a); }   // no link: open the app
                 NotifService svc = NotifService.instance;
                 if (it.autoCancel && svc != null) {
                     try { svc.cancelNotification(it.key); } catch (RuntimeException ignored) { }

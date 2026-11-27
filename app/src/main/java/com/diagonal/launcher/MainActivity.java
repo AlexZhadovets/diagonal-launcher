@@ -251,17 +251,21 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     @Override
     public void onInfoClick() {
-        if (info.notif != null) { info.openNotification(); return; }
+        if (info.notif != null) {
+            String pkg = info.notif.pkg;
+            if (!info.openNotification()) { AppEntry a = appFor(pkg); if (a != null) launch(a); }
+            return;
+        }
         if (info.media != null) {   // tap on the title: open the music app
             InfoHub.Media mm = info.media;
+            boolean opened = false;
             try {
                 if (mm.controller != null && mm.controller.getSessionActivity() != null) {
                     InfoHub.sendAllowingStart(this, mm.controller.getSessionActivity());
-                } else {
-                    AppEntry a = appFor(mm.pkg);
-                    if (a != null) launch(a);
+                    opened = true;
                 }
             } catch (Exception ignored) { }
+            if (!opened) { AppEntry a = appFor(mm.pkg); if (a != null) launch(a); }
             return;
         }
         if (!info.hasNotificationAccess()) { openNotificationAccess(); return; }
@@ -302,8 +306,10 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                     ColorExtractor.textColorFor(c), true, m.playing);
             diagonal.setMusicPosition(m.position, m.updateTime, m.speed, m.duration);
         } else if (notifLine != null) {
-            // clock stays; the fresh notification is just a small line under it for a few seconds
-            diagonal.setInfo(info.time(), notifLine, null, 0xFF16161C, 0xFFFFFFFF);
+            // clock stays; for a few seconds the stripe takes the app's colour and shows the message
+            AppEntry na = appFor(n.pkg);
+            int c = na != null ? na.color : 0xFF16161C;
+            diagonal.setInfo(info.time(), notifLine, null, c, ColorExtractor.textColorFor(c));
         } else {
             String sub = info.date();
             if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;

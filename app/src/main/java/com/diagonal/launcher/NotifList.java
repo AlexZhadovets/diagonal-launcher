@@ -181,7 +181,8 @@ public class NotifList extends ScrollView {
         boolean open = expanded.contains(head.pkg);
         boolean expandable = group.size() > 1 || hasMore(head);
 
-        SlantCard card = new SlantCard(getContext(), 0xFF1C1C23);
+        int ink = ColorExtractor.textColorFor(accent);
+        SlantCard card = new SlantCard(getContext(), accent);   // each app's notifications in its own colour
         card.setOrientation(LinearLayout.VERTICAL);
         int p = Math.round(12 * dp);
         card.setPadding(p, Math.round(10 * dp), p, Math.round(10 * dp));
@@ -193,13 +194,13 @@ public class NotifList extends ScrollView {
         AppTileView tile = new AppTileView(getContext(), app);
         int th = Math.round(18 * dp);
         header.addView(tile, new LinearLayout.LayoutParams(Math.round(th * 1.6f), th));
-        TextView name = text(12, accent == 0xFF16161C ? 0xFFFFFFFF : lighten(accent), true);
+        TextView name = text(12, (ink & 0x00FFFFFF) | 0xCC000000, true);
         name.setText((app != null ? app.label : head.pkg) + "  ·  " + ago(head.when)
                 + (group.size() > 1 && !open ? "  ·  " + group.size() : ""));
         name.setPadding(Math.round(8 * dp), 0, 0, 0);
         header.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         if (expandable) {
-            TextView chev = text(16, 0xCCFFFFFF, true);
+            TextView chev = text(16, ink, true);
             chev.setText(open ? "⌃" : "⌄");
             chev.setGravity(Gravity.CENTER);
             int cs = Math.round(32 * dp);
@@ -217,7 +218,7 @@ public class NotifList extends ScrollView {
         int show = open ? group.size() : Math.min(group.size(), 2);
         for (int k = 0; k < show; k++) card.addView(entryView(group.get(k), open, accent));
         if (!open && group.size() > 2) {
-            TextView more = text(12, 0x99FFFFFF, false);
+            TextView more = text(12, (ink & 0x00FFFFFF) | 0x99000000, false);
             more.setText("+" + (group.size() - 2));
             more.setPadding(0, Math.round(4 * dp), 0, 0);
             card.addView(more);
@@ -237,6 +238,7 @@ public class NotifList extends ScrollView {
     private boolean hasMore(Item it) { return !it.actions.isEmpty() || (it.big != null && !it.big.equals(it.text)); }
 
     private View entryView(Item it, boolean open, int accent) {
+        int ink = ColorExtractor.textColorFor(accent);
         LinearLayout box = new LinearLayout(getContext());
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, Math.round(6 * dp), 0, 0);
@@ -245,9 +247,9 @@ public class NotifList extends ScrollView {
         row.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout texts = new LinearLayout(getContext());
         texts.setOrientation(LinearLayout.VERTICAL);
-        TextView title = text(14, 0xFFFFFFFF, true);
+        TextView title = text(14, ink, true);
         title.setText(it.title);
-        TextView body = text(13, 0xCCFFFFFF, false);
+        TextView body = text(13, (ink & 0x00FFFFFF) | 0xCC000000, false);
         String b = open && it.big != null ? it.big : it.text;
         body.setText(b);
         if (open) { body.setSingleLine(false); body.setMaxLines(8); }
@@ -269,7 +271,11 @@ public class NotifList extends ScrollView {
             LinearLayout acts = new LinearLayout(getContext());
             acts.setPadding(0, Math.round(6 * dp), 0, 0);
             for (Action a : it.actions) {
-                TextView btn = text(13, lighten(accent), true);
+                TextView btn = text(13, ink, true);
+                GradientDrawable bb = new GradientDrawable();
+                bb.setCornerRadius(14 * dp);
+                bb.setColor(ink == 0xFFFFFFFF ? 0x33000000 : 0x22FFFFFF);
+                btn.setBackground(bb);
                 btn.setText(a.title);
                 int hp = Math.round(10 * dp);
                 btn.setPadding(hp, Math.round(6 * dp), hp, Math.round(6 * dp));
@@ -277,7 +283,10 @@ public class NotifList extends ScrollView {
                     if (freeForm(a) != null) showReply(box, acts, it, a, accent);
                     else send(a.intent, null);
                 });
-                acts.addView(btn);
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                blp.rightMargin = Math.round(6 * dp);
+                acts.addView(btn, blp);
             }
             box.addView(acts);
         }
@@ -292,19 +301,20 @@ public class NotifList extends ScrollView {
         reply.setPadding(0, Math.round(6 * dp), 0, 0);
         EditText field = new EditText(getContext());
         field.setHint(host.replyHint());
-        field.setHintTextColor(0x66FFFFFF);
-        field.setTextColor(0xFFFFFFFF);
+        int fieldInk = ColorExtractor.textColorFor(accent);
+        field.setHintTextColor((fieldInk & 0x00FFFFFF) | 0x77000000);
+        field.setTextColor(fieldInk);
         field.setTextSize(14);
         field.setSingleLine(true);
         field.setImeOptions(EditorInfo.IME_ACTION_SEND);
         GradientDrawable fb = new GradientDrawable();
         fb.setCornerRadius(16 * dp);
-        fb.setColor(0xFF2A2A31);
+        fb.setColor(fieldInk == 0xFFFFFFFF ? 0x33000000 : 0x22FFFFFF);
         field.setBackground(fb);
         int hp = Math.round(12 * dp);
         field.setPadding(hp, Math.round(8 * dp), hp, Math.round(8 * dp));
         reply.addView(field, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView sendBtn = text(18, lighten(accent), true);
+        TextView sendBtn = text(18, ColorExtractor.textColorFor(accent), true);
         sendBtn.setText("➤");
         sendBtn.setGravity(Gravity.CENTER);
         int s = Math.round(40 * dp);

@@ -296,16 +296,19 @@ final class InfoHub {
         notif = out;
     }
 
-    void openNotification() {
+    /** Opens the notification; returns false if it couldn't (then the caller opens the app itself). */
+    boolean openNotification() {
         Notif n = notif;
-        if (n == null) return;
+        if (n == null) return false;
+        boolean ok = false;
         try {
-            if (n.intent != null) sendAllowingStart(ctx, n.intent);
+            if (n.intent != null) { sendAllowingStart(ctx, n.intent); ok = true; }
         } catch (PendingIntent.CanceledException ignored) { }
         NotifService svc = NotifService.instance;
         if (n.autoCancel && svc != null) {
             try { svc.cancelNotification(n.key); } catch (RuntimeException ignored) { }
         }
+        return ok;
     }
 
     /** Android 14+ blocks activity starts from PendingIntents unless the sender opts in. */
