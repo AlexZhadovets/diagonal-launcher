@@ -79,7 +79,9 @@ public class DiagonalView extends View {
         dividerPaint.setColor(0x55FFFFFF);
         dividerPaint.setStrokeWidth(2 * dp);
 
-        textPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        textPaint.setTypeface(android.os.Build.VERSION.SDK_INT >= 28
+                ? Typeface.create(Typeface.SANS_SERIF, 900, false)   // extra bold
+                : Typeface.create("sans-serif-black", Typeface.BOLD));
         textPaint.setTextAlign(Paint.Align.LEFT);
 
         hintPaint.setTextSize(18 * dp);
@@ -143,8 +145,8 @@ public class DiagonalView extends View {
     private void computeSizes(int w, int h) {
         float S = (w + h) * INV_SQRT2;
         spacing = S / VISIBLE;
-        band = spacing * 0.9f;
-        capMargin = 14 * dp;
+        band = spacing + 1f;                 // no gaps (1px overlap hides seams)
+        capMargin = 24 * dp;
         iconSize = Math.min(band * 0.5f, 96 * dp);
         iconGap = Math.max(12 * dp, band * 0.1f);
         float ts = Math.max(18 * dp, Math.min(band * 0.19f, 34 * dp));
@@ -209,11 +211,6 @@ public class DiagonalView extends View {
         canvas.save();
         canvas.rotate(45f);
         for (int i = first; i <= last; i++) drawStripe(canvas, items.get(i), slotS(i));
-        // Thin dividers + captions between the three sections.
-        if (favEnd > favStart) {
-            if (favStart > 0) drawDivider(canvas, favStart * spacing - scroll, labelUsage, true);
-            if (favEnd < n) drawDivider(canvas, favEnd * spacing - scroll, labelAlpha, false);
-        }
         canvas.restore();
     }
 
@@ -232,18 +229,17 @@ public class DiagonalView extends View {
     }
 
     private void drawStripe(Canvas canvas, AppEntry app, float s) {
+        float half = band / 2f;
+        float far = screenS() * 2f;
+        // The stripe runs past both screen edges, so there are no empty corners.
+        tmpRect.set(s - half, -far, s + half, far);
+        bandPaint.setColor(app.color);
+        canvas.drawRect(tmpRect, bandPaint);
+
+        // Icon + label go on the part of the centre line that is on screen.
         visibleT(s);
         float tMin = tRange[0] + capMargin;
         float tMax = tRange[1] - capMargin;
-        float half = band / 2f;
-        if (tMax - tMin < 2 * half) {               // near a corner: keep a small square
-            float mid = (tRange[0] + tRange[1]) / 2f;
-            tMin = mid - half;
-            tMax = mid + half;
-        }
-        tmpRect.set(s - half, tMin, s + half, tMax);
-        bandPaint.setColor(app.color);
-        canvas.drawRect(tmpRect, bandPaint);         // sharp, square ends
 
         float length = tMax - tMin;
         if (length < iconSize + 2 * iconGap) return;

@@ -3,69 +3,72 @@ package com.diagonal.launcher;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 
-/** Picks the dominant, saturated colour of an app icon without any library. */
+/**
+ * Picks the BACKGROUND colour of an app icon: the colour of its outer opaque edge.
+ * TikTok (black tile) → black stripe, YouTube (white tile) → white stripe,
+ * a round blue icon → blue stripe.
+ */
 final class ColorExtractor {
-    private static final int BUCKETS = 36;
+    private static final int PROBES_PER_SIDE = 16;
 
     private ColorExtractor() {}
 
     static int dominantColor(Bitmap bmp) {
         int w = bmp.getWidth();
         int h = bmp.getHeight();
-        // Sample a ~24x24 grid instead of every pixel: same result, far less work.
-        int step = Math.max(1, Math.min(w, h) / 24);
-        int[] px = new int[((w + step - 1) / step) * ((h + step - 1) / step)];
+        int inset = Math.max(2, Math.min(w, h) / 30); // step past the anti-aliased rim
+        int[] samples = new int[PROBES_PER_SIDE * 4];
         int n = 0;
-        for (int y = 0; y < h; y += step) {
-            for (int x = 0; x < w; x += step) px[n++] = bmp.getPixel(x, y);
+
+        for (int k = 0; k < PROBES_PER_SIDE; k++) {
+            // probe positions spread over the middle 80% of each side
+            float f = 0.1f + 0.8f * k / (PROBES_PER_SIDE - 1);
+            int px = Math.round(f * (w - 1));
+            int py = Math.round(f * (h - 1));
+            n = probe(bmp, px, 0, 0, 1, inset, samples, n);       // from the top, going down
+            n = probe(bmp, px, h - 1, 0, -1, inset, samples, n);  // from the bottom, going up
+            n = probe(bmp, 0, py, 1, 0, inset, samples, n);       // from the left
+            n = probe(bmp, w - 1, py, -1, 0, inset, samples, n);  // from the right
         }
+        if (n == 0) return Color.DKGRAY;
 
-        float[] weight = new float[BUCKETS];
-        float[] rSum = new float[BUCKETS];
-        float[] gSum = new float[BUCKETS];
-        float[] bSum = new float[BUCKETS];
-        float[] hsv = new float[3];
-        long ar = 0, ag = 0, ab = 0;
-        int opaque = 0;
-
-        for (int k = 0; k < n; k++) {
-            int c = px[k];
-            if (Color.alpha(c) < 128) continue;
-            int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
-            ar += r; ag += g; ab += b; opaque++;
-            Color.RGBToHSV(r, g, b, hsv);
-            float s = hsv[1], v = hsv[2];
-            if (s < 0.25f || v < 0.2f) continue; // skip greys, black, white
-            int bucket = Math.min(BUCKETS - 1, (int) (hsv[0] / 360f * BUCKETS));
-            float wgt = s * v;
-            weight[bucket] += wgt;
-            rSum[bucket] += r * wgt;
-            gSum[bucket] += g * wgt;
-            bSum[bucket] += b * wgt;
+        // Most common colour (quantised to 4 bits per channel), averaged.
+        int[] counts = new int[4096];
+        int best = quant(samples[0]);
+        for (int i = 0; i < n; i++) {
+            int q = quant(samples[i]);
+            if (++counts[q] > counts[best]) best = q;
         }
-
-        int best = -1;
-        float bestW = 0f;
-        for (int i = 0; i < BUCKETS; i++) {
-            if (weight[i] > bestW) { bestW = weight[i]; best = i; }
+        long r = 0, g = 0, b = 0;
+        int m = 0;
+        for (int i = 0; i < n; i++) {
+            if (quant(samples[i]) != best) continue;
+            int c = samples[i];
+            r += Color.red(c); g += Color.green(c); b += Color.blue(c); m++;
         }
+        return Color.rgb((int) (r / m), (int) (g / m), (int) (b / m));
+    }
 
-        int color;
-        if (best >= 0 && bestW > 0f) {
-            color = Color.rgb(
-                    Math.round(rSum[best] / bestW),
-                    Math.round(gSum[best] / bestW),
-                    Math.round(bSum[best] / bestW));
-        } else if (opaque > 0) {
-            color = Color.rgb((int) (ar / opaque), (int) (ag / opaque), (int) (ab / opaque));
-        } else {
-            color = Color.GRAY;
+    /** Walks from (x,y) in direction (dx,dy) to the first opaque pixel, then `inset` px further. */
+    private static int probe(Bitmap bmp, int x, int y, int dx, int dy, int inset, int[] out, int n) {
+        int w = bmp.getWidth(), h = bmp.getHeight();
+        int limit = Math.max(w, h) / 2;
+        for (int step = 0; step < limit; step++) {
+            int cx = x + dx * step, cy = y + dy * step;
+            if (cx < 0 || cy < 0 || cx >= w || cy >= h) return n;
+            if (Color.alpha(bmp.getPixel(cx, cy)) >= 200) {
+                int ix = Math.max(0, Math.min(w - 1, cx + dx * inset));
+                int iy = Math.max(0, Math.min(h - 1, cy + dy * inset));
+                int c = bmp.getPixel(ix, iy);
+                if (Color.alpha(c) >= 200) out[n++] = c | 0xFF000000;
+                return n;
+            }
         }
+        return n;
+    }
 
-        // Make sure the line is clearly visible on the dark background.
-        Color.colorToHSV(color, hsv);
-        if (hsv[2] < 0.55f) hsv[2] = 0.55f;
-        return Color.HSVToColor(hsv);
+    private static int quant(int c) {
+        return ((Color.red(c) >> 4) << 8) | ((Color.green(c) >> 4) << 4) | (Color.blue(c) >> 4);
     }
 
     static int textColorFor(int bg) {
