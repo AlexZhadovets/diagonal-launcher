@@ -252,7 +252,18 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     @Override
     public void onInfoClick() {
         if (info.notif != null) { info.openNotification(); return; }
-        if (info.media != null) { info.playPause(); return; }
+        if (info.media != null) {   // tap on the title: open the music app
+            InfoHub.Media mm = info.media;
+            try {
+                if (mm.controller != null && mm.controller.getSessionActivity() != null) {
+                    InfoHub.sendAllowingStart(this, mm.controller.getSessionActivity());
+                } else {
+                    AppEntry a = appFor(mm.pkg);
+                    if (a != null) launch(a);
+                }
+            } catch (Exception ignored) { }
+            return;
+        }
         if (!info.hasNotificationAccess()) { openNotificationAccess(); return; }
         startFirst(new Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS));
     }
@@ -261,7 +272,14 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private void updateInfoStripe() {
         InfoHub.Media m = info.media;
         InfoHub.Notif n = info.notif;
-        if (m != null && n == null) {
+        String notifLine = null;
+        if (n != null) {
+            AppEntry app = appFor(n.pkg);
+            String from = app != null ? app.label : "";
+            String who = n.title.isEmpty() ? from : (from.isEmpty() ? n.title : from + " · " + n.title);
+            notifLine = "● " + who + (n.text.isEmpty() ? "" : ": " + n.text);
+        }
+        if (m != null) {
             if (m.art != lastArt) {
                 // new track art: scale + colour off the main thread, then redraw
                 final Bitmap art = m.art;
@@ -279,15 +297,13 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 });
             }
             int c = lastArtColor;
-            diagonal.setInfo(m.title, (m.playing ? "" : "⏸  ") + m.artist, lastArtScaled, c, ColorExtractor.textColorFor(c));
-        } else if (n != null) {
+            // player: a new message only replaces the artist line for a moment; the colour stays
+            diagonal.setInfo(m.title, notifLine != null ? notifLine : m.artist, lastArtScaled, c,
+                    ColorExtractor.textColorFor(c), true, m.playing);
+            diagonal.setMusicPosition(m.position, m.updateTime, m.speed, m.duration);
+        } else if (notifLine != null) {
             // clock stays; the fresh notification is just a small line under it for a few seconds
-            AppEntry app = null;
-            for (AppEntry a : allApps) if (a.component.getPackageName().equals(n.pkg)) { app = a; break; }
-            String from = app != null ? app.label : "";
-            String who = n.title.isEmpty() ? from : (from.isEmpty() ? n.title : from + " · " + n.title);
-            String line = "● " + who + (n.text.isEmpty() ? "" : ": " + n.text);
-            diagonal.setInfo(info.time(), line, null, 0xFF16161C, 0xFFFFFFFF);
+            diagonal.setInfo(info.time(), notifLine, null, 0xFF16161C, 0xFFFFFFFF);
         } else {
             String sub = info.date();
             if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
@@ -298,6 +314,13 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     }
 
     int artColor() { return lastArtColor; }
+
+    @Override
+    public void onMusicControl(int which) {
+        if (which == 0) info.previous();
+        else if (which == 2) info.next();
+        else info.playPause();
+    }
 
     AppEntry appFor(String pkg) {
         for (AppEntry a : allApps) if (a.component.getPackageName().equals(pkg)) return a;

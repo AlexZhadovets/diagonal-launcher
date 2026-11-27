@@ -53,6 +53,8 @@ final class InfoHub {
         Bitmap art;
         boolean playing;
         MediaController controller;
+        long position, updateTime, duration;
+        float speed = 1f;
     }
 
     static final class Notif {
@@ -215,6 +217,13 @@ final class InfoHub {
         m.controller = best;
         m.pkg = best.getPackageName();
         m.playing = bestPlaying;
+        PlaybackState ps = best.getPlaybackState();
+        if (ps != null) {
+            m.position = ps.getPosition();
+            m.updateTime = ps.getLastPositionUpdateTime();
+            m.speed = ps.getPlaybackSpeed() == 0 ? 1f : ps.getPlaybackSpeed();
+        }
+        m.duration = Math.max(0, md.getLong(MediaMetadata.METADATA_KEY_DURATION));
         m.title = md.getString(MediaMetadata.METADATA_KEY_TITLE);
         if (m.title == null) m.title = md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
         m.artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST);

@@ -3,6 +3,7 @@ package com.diagonal.launcher;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
@@ -36,6 +37,8 @@ public class DiagonalView extends View {
         void onLongPress(AppEntry app);
         void onInfoClick();
         void onInfoLongPress();
+        /** 0 previous, 1 play/pause, 2 next. */
+        void onMusicControl(int which);
         /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
         void onCornerSwipe(int direction);
     }
@@ -143,16 +146,6 @@ public class DiagonalView extends View {
     }
 
     public void setListener(Listener l) { listener = l; }
-
-    /** Content of the centre stripe. */
-    public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor) {
-        infoTitle = title == null ? "" : title;
-        infoSubtitle = subtitle == null ? "" : subtitle;
-        infoIcon = icon;
-        infoColor = color;
-        infoText = textColor;
-        invalidate();
-    }
 
     /** Draws the home screen as it looks on open, for the lock-screen picture. */
     public void drawSnapshot(Canvas c) {
@@ -332,44 +325,222 @@ public class DiagonalView extends View {
 
     private int colorOf(AppEntry a) { return a.info ? infoColor : a.color; }
 
+    // ---- centre stripe: clock / notification / music player -------------
+
+    /** What the centre stripe shows; swapped with a smooth cross-fade. */
+    private static final class InfoContent {
+        String title = "", sub = "";
+        android.graphics.Bitmap icon;
+        int text = 0xFFFFFFFF;
+        boolean music, playing;
+    }
+
+    private InfoContent infoNow = new InfoContent(), infoPrev;
+    private float infoFade = 1f;               // 0 → 1 while switching
+    private int infoColorFrom = 0xFF16161C, infoColorTo = 0xFF16161C;
+    private android.animation.ValueAnimator infoAnim;
+    private final android.animation.ArgbEvaluator argb = new android.animation.ArgbEvaluator();
+    private final Paint ctlPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint timePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final Path ctlPath = new Path();
+    // music position: base + time since update × speed
+    private long mPos, mUpd, mDur;
+    private float mSpeed;
+
+    /** Content of the centre stripe. A change fades smoothly from the old look to the new one. */
+    public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor) {
+        setInfo(title, subtitle, icon, color, textColor, false, false);
+    }
+
+    public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor,
+                        boolean music, boolean playing) {
+        InfoContent n = new InfoContent();
+        n.title = title == null ? "" : title;
+        n.sub = subtitle == null ? "" : subtitle;
+        n.icon = icon;
+        n.text = textColor;
+        n.music = music;
+        n.playing = playing;
+        boolean sameLook = n.title.equals(infoNow.title) && n.sub.equals(infoNow.sub) && n.icon == infoNow.icon
+                && n.music == infoNow.music && n.text == infoNow.text && color == infoColorTo;
+        if (sameLook) {
+            infoNow.playing = playing;
+            invalidate();
+            return;
+        }
+        boolean onlyText = n.music == infoNow.music && n.icon == infoNow.icon && color == infoColorTo;
+        infoColorFrom = currentInfoColor();
+        infoColorTo = color;
+        infoPrev = infoNow;
+        infoNow = n;
+        infoText = textColor;
+        if (infoAnim != null) infoAnim.cancel();
+        infoFade = 0f;
+        infoAnim = android.animation.ValueAnimator.ofFloat(0f, 1f);
+        infoAnim.setDuration(onlyText ? 260 : 420);
+        infoAnim.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        infoAnim.addUpdateListener(a -> { infoFade = (float) a.getAnimatedValue(); invalidate(); });
+        infoAnim.start();
+    }
+
+    /** Music position for the progress bar (all times in ms, update time from elapsedRealtime). */
+    public void setMusicPosition(long position, long updateTime, float speed, long duration) {
+        mPos = position;
+        mUpd = updateTime;
+        mSpeed = speed;
+        mDur = duration;
+        invalidate();
+    }
+
+    private int currentInfoColor() {
+        return infoFade >= 1f ? infoColorTo : (int) argb.evaluate(infoFade, infoColorFrom, infoColorTo);
+    }
+
     private void drawInfoStripe(Canvas canvas, float s) {
         float half = band / 2f, far = screenS() * 2f;
         tmpRect.set(s - half, -far, s + half, far);
+        infoColor = currentInfoColor();
         bandPaint.setColor(infoColor);
         canvas.drawRect(tmpRect, bandPaint);
         if (snapshotMode) return;
 
         visibleT(s);
         float tMin = tRange[0] + capMargin, tMax = tRange[1] - capMargin;
+        if (tMax - tMin < 80 * dp) return;
+        canvas.save();
+        canvas.rotate(-90f, s, (tMin + tMax) / 2f);   // text reads bottom-left → top-right
+        if (infoFade < 1f && infoPrev != null) {
+            // cross-fade: old content out in the first half, new content in during the second
+            if (infoFade < 0.5f) drawInfoContent(canvas, infoPrev, s, tMin, tMax, 1f - infoFade * 2f);
+            else drawInfoContent(canvas, infoNow, s, tMin, tMax, infoFade * 2f - 1f);
+        } else {
+            drawInfoContent(canvas, infoNow, s, tMin, tMax, 1f);
+        }
+        canvas.restore();
+        if (infoNow.music && infoNow.playing) postInvalidateDelayed(500);   // keep the progress bar moving
+    }
+
+    /** Draws one look of the centre stripe in the rotated (reading) frame, centred on x = s. */
+    private void drawInfoContent(Canvas canvas, InfoContent c, float s, float tMin, float tMax, float alpha) {
+        int a = Math.round(255 * alpha);
         float mid = (tMin + tMax) / 2f;
-        float iconW = infoIcon != null ? iconSize + iconGap : 0f;
-        float avail = (tMax - tMin) - 2 * iconGap - iconW;
-        if (avail < 40 * dp) return;
-        infoTitlePaint.setColor(infoText);
-        infoSubPaint.setColor(infoText);
-        infoSubPaint.setAlpha(200);
-        CharSequence t = fit(infoTitle, infoTitlePaint, avail);
-        CharSequence st = fit(infoSubtitle, infoSubPaint, avail);
+        float len = tMax - tMin;
+        float left = s - len / 2f, right = s + len / 2f;
+        float btn = 44 * dp, gap = 10 * dp;
+
+        float blockL = left + iconGap, blockR = right - iconGap;
+        if (c.music) {
+            blockL = left + btn + 2 * gap;
+            blockR = right - 2 * btn - 3 * gap;
+        }
+        float avail = blockR - blockL;
+        float iconW = c.icon != null ? iconSize + iconGap : 0f;
+        float textAvail = avail - iconW;
+        if (textAvail < 40 * dp) return;
+
+        infoTitlePaint.setColor(c.text);
+        infoTitlePaint.setAlpha(a);
+        infoSubPaint.setColor(c.text);
+        infoSubPaint.setAlpha(Math.round(200 * alpha));
+        CharSequence t = fit(c.title, infoTitlePaint, textAvail);
+        CharSequence st = fit(c.sub, infoSubPaint, textAvail);
         float tw = infoTitlePaint.measureText(t, 0, t.length());
         float sw = infoSubPaint.measureText(st, 0, st.length());
         float blockW = iconW + Math.max(tw, sw);
-
-        Paint.FontMetrics a = infoTitlePaint.getFontMetrics();
-        Paint.FontMetrics b = infoSubPaint.getFontMetrics();
-        float titleH = a.descent - a.ascent, subH = st.length() > 0 ? b.descent - b.ascent : 0f;
+        Paint.FontMetrics fa = infoTitlePaint.getFontMetrics();
+        Paint.FontMetrics fb = infoSubPaint.getFontMetrics();
+        float titleH = fa.descent - fa.ascent, subH = st.length() > 0 ? fb.descent - fb.ascent : 0f;
         float top = -(titleH + subH) / 2f;
-
-        canvas.save();
-        canvas.rotate(-90f, s, mid);
-        float x0 = s - blockW / 2f;
-        if (infoIcon != null) {
+        float x0 = (blockL + blockR) / 2f - blockW / 2f;
+        if (c.icon != null) {
             iconRect.set(x0, mid - iconSize / 2f, x0 + iconSize, mid + iconSize / 2f);
-            canvas.drawBitmap(infoIcon, null, iconRect, iconPaint);
+            iconPaint.setAlpha(a);
+            canvas.drawBitmap(c.icon, null, iconRect, iconPaint);
+            iconPaint.setAlpha(255);
         }
         float tx = x0 + iconW;
-        canvas.drawText(t, 0, t.length(), tx, mid + top - a.ascent, infoTitlePaint);
-        if (st.length() > 0) canvas.drawText(st, 0, st.length(), tx, mid + top + titleH - b.ascent, infoSubPaint);
-        canvas.restore();
+        canvas.drawText(t, 0, t.length(), tx, mid + top - fa.ascent, infoTitlePaint);
+        if (st.length() > 0) canvas.drawText(st, 0, st.length(), tx, mid + top + titleH - fb.ascent, infoSubPaint);
+
+        if (!c.music) return;
+        // controls: ⏮ at the start, ⏯ and ⏭ at the end
+        ctlPaint.setColor(c.text);
+        ctlPaint.setAlpha(a);
+        float prevX = left + gap + btn / 2f;
+        float nextX = right - gap - btn / 2f;
+        float playX = nextX - btn - gap;
+        drawSkip(canvas, prevX, mid, btn * 0.42f, false);
+        drawSkip(canvas, nextX, mid, btn * 0.42f, true);
+        drawPlayPause(canvas, playX, mid, btn * 0.5f, c.playing);
+
+        // progress along the bottom edge, time above its start
+        if (mDur > 0) {
+            long pos = mPos;
+            if (c.playing && mUpd > 0) pos += (long) ((android.os.SystemClock.elapsedRealtime() - mUpd) * mSpeed);
+            pos = Math.max(0, Math.min(mDur, pos));
+            float by = mid + band / 2f - 14 * dp;
+            float bl = left + gap, br = right - gap;
+            barPaint.setStrokeWidth(3 * dp);
+            barPaint.setStrokeCap(Paint.Cap.ROUND);
+            barPaint.setColor(c.text);
+            barPaint.setAlpha(Math.round(70 * alpha));
+            canvas.drawLine(bl, by, br, by, barPaint);
+            barPaint.setAlpha(a);
+            canvas.drawLine(bl, by, bl + (br - bl) * pos / (float) mDur, by, barPaint);
+            timePaint.setColor(c.text);
+            timePaint.setAlpha(Math.round(190 * alpha));
+            timePaint.setTextSize(12 * dp);
+            timePaint.setTypeface(infoSubPaint.getTypeface());
+            canvas.drawText(clock(pos) + " / " + clock(mDur), bl, by - 7 * dp, timePaint);
+        }
+    }
+
+    private static String clock(long ms) {
+        long sec = ms / 1000;
+        return (sec / 60) + ":" + (sec % 60 < 10 ? "0" : "") + (sec % 60);
+    }
+
+    private void drawSkip(Canvas canvas, float cx, float cy, float r, boolean forward) {
+        float d = forward ? 1 : -1;
+        ctlPath.reset();
+        ctlPath.moveTo(cx - d * r * 0.7f, cy - r * 0.7f);
+        ctlPath.lineTo(cx + d * r * 0.4f, cy);
+        ctlPath.lineTo(cx - d * r * 0.7f, cy + r * 0.7f);
+        ctlPath.close();
+        canvas.drawPath(ctlPath, ctlPaint);
+        float bx = cx + d * r * 0.55f;
+        canvas.drawRect(Math.min(bx, bx + d * r * 0.22f), cy - r * 0.7f, Math.max(bx, bx + d * r * 0.22f), cy + r * 0.7f, ctlPaint);
+    }
+
+    private void drawPlayPause(Canvas canvas, float cx, float cy, float r, boolean playing) {
+        if (playing) {
+            canvas.drawRect(cx - r * 0.55f, cy - r * 0.7f, cx - r * 0.15f, cy + r * 0.7f, ctlPaint);
+            canvas.drawRect(cx + r * 0.15f, cy - r * 0.7f, cx + r * 0.55f, cy + r * 0.7f, ctlPaint);
+        } else {
+            ctlPath.reset();
+            ctlPath.moveTo(cx - r * 0.5f, cy - r * 0.75f);
+            ctlPath.lineTo(cx + r * 0.75f, cy);
+            ctlPath.lineTo(cx - r * 0.5f, cy + r * 0.75f);
+            ctlPath.close();
+            canvas.drawPath(ctlPath, ctlPaint);
+        }
+    }
+
+    /** Which music control is under a touch on the centre stripe: 0 prev, 1 play/pause, 2 next, −1 none. */
+    private int musicControlAt(int index, float x, float y) {
+        if (!infoNow.music) return -1;
+        float s = slotS(index);
+        visibleT(s);
+        float tMin = tRange[0] + capMargin, tMax = tRange[1] - capMargin;
+        float t = (y - x) * INV_SQRT2;
+        float fromLeft = tMax - t;                 // distance from the start (bottom-left end) of the stripe
+        float fromRight = t - tMin;
+        float btn = 44 * dp, gap = 10 * dp;
+        if (fromLeft >= 0 && fromLeft < btn + 2 * gap) return 0;
+        if (fromRight >= 0 && fromRight < btn + 1.5f * gap) return 2;
+        if (fromRight >= 0 && fromRight < 2 * btn + 3 * gap) return 1;
+        return -1;
     }
 
     private static CharSequence fit(String text, TextPaint p, float avail) {
@@ -553,7 +724,12 @@ public class DiagonalView extends View {
             if (wasFlinging) return true;            // a tap during a fling only stops it
             int i = indexAt(e.getX(), e.getY());
             if (i < 0 || listener == null) return false;
-            if (items.get(i).info) { listener.onInfoClick(); return true; }
+            if (items.get(i).info) {
+                int ctl = musicControlAt(i, e.getX(), e.getY());
+                if (ctl >= 0) { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); listener.onMusicControl(ctl); }
+                else listener.onInfoClick();
+                return true;
+            }
             int r = Math.round(band / 2f);
             Rect bounds = new Rect(Math.round(e.getX()) - r, Math.round(e.getY()) - r,
                     Math.round(e.getX()) + r, Math.round(e.getY()) + r);
