@@ -75,6 +75,7 @@ final class Panels {
     // own widgets
     private TextView musicTitle, musicArtist, musicPlay;
     private SlantCard musicCard;
+    private final List<TextView> musicButtons = new ArrayList<>();
     private ImageView musicArt;
     private LinearLayout chatRow, claudeChips;
     private TextView chatHint;
@@ -90,7 +91,7 @@ final class Panels {
 
         // ---- widget window (staircase of own cards) ------------------------
         widgets = new WidgetPanel(act);
-        widgets.setOnEmptyTap(() -> widgets.setLevel(widgets.level() - 1));
+        widgets.setOnEmptyTap(() -> widgets.setLevel(prefs.getBoolean(KEY_WIDGETS_ONE, false) ? 0 : widgets.level() - 1));
         buildWidgetCards();
         root.addView(widgets, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -615,12 +616,35 @@ final class Panels {
 
     /** App widgets need the app list; build them once it has loaded. */
     void onAppsLoaded() {
-        for (String id : prefs.getString(KEY_CARDS, "").split(",")) {
-            if (id.startsWith("app:") && !cardViews.containsKey(id)) { arrangeCards(); return; }
+        boolean changed = false;
+        for (String id : new ArrayList<>(cardViews.keySet())) {
+            if (!id.startsWith("app:")) continue;
+            String pkg = id.substring(4);
+            AppEntry now = act.appFor(pkg);
+            if (now == null || now != appCardEntries.get(pkg) || now.color != appCardColors.getOrDefault(pkg, 0)) {
+                cardViews.remove(id);            // uninstalled, updated or recoloured: rebuild
+                cardHeights.remove(id);
+                appChipRows.remove(pkg);
+                changed = true;
+            }
         }
+        for (String id : prefs.getString(KEY_CARDS, "").split(",")) {
+            if (id.startsWith("app:") && !cardViews.containsKey(id)) changed = true;
+        }
+        if (changed) arrangeCards();
     }
 
-    private void saveOrder(List<String> ids) { prefs.edit().putString(KEY_CARDS, TextUtils.join(",", ids)).apply(); }
+    private final java.util.Map<String, AppEntry> appCardEntries = new java.util.HashMap<>();
+    private final java.util.Map<String, Integer> appCardColors = new java.util.HashMap<>();
+
+    private void saveOrder(List<String> ids) {
+        List<String> out = new ArrayList<>(ids);
+        // keep app widgets whose app can't be found right now (disabled / updating)
+        for (String id : prefs.getString(KEY_CARDS, "").split(",")) {
+            if (id.startsWith("app:") && !cardViews.containsKey(id) && !out.contains(id)) out.add(id);
+        }
+        prefs.edit().putString(KEY_CARDS, TextUtils.join(",", out)).apply();
+    }
 
     private View addCard;
 
@@ -930,6 +954,8 @@ final class Panels {
         chips.setPadding(0, Math.round(10 * dp), 0, 0);
         card.addView(chips);
         appChipRows.put(pkg, chips);
+        appCardEntries.put(pkg, app);
+        appCardColors.put(pkg, app.color);
         register(id, card, 118);
         return true;
     }
@@ -1021,6 +1047,7 @@ final class Panels {
         t.setText(label);
         t.setGravity(Gravity.CENTER);
         t.setOnClickListener(l);
+        musicButtons.add(t);
         int s = Math.round(44 * dp);
         t.setLayoutParams(new LinearLayout.LayoutParams(s, s));
         return t;
@@ -1046,7 +1073,14 @@ final class Panels {
             musicArt.setImageBitmap(m.art);
             musicPlay.setText(m.playing ? "⏸" : "▶");
         }
-        if (musicCard != null) musicCard.setColor(m != null && m.art != null ? act.artColor() : 0xFF26262E);
+        if (musicCard != null) {
+            int col = m != null && m.art != null ? act.artColor() : 0xFF26262E;
+            musicCard.setColor(col);
+            int ink = ColorExtractor.textColorFor(col);
+            musicTitle.setTextColor(ink);
+            musicArtist.setTextColor((ink & 0x00FFFFFF) | 0xBB000000);
+            for (TextView b : musicButtons) b.setTextColor(ink);
+        }
     }
 
     // ---- Claude ---------------------------------------------------------

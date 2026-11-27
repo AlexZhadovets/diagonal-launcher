@@ -31,8 +31,21 @@ final class SlantCard extends LinearLayout {
         if (baseRight < 0) baseRight = getPaddingRight();
         if (c == cut) return;
         cut = c;
-        setPadding(getPaddingLeft(), getPaddingTop(), baseRight + cut, getPaddingBottom());
+        if ((getGravity() & android.view.Gravity.HORIZONTAL_GRAVITY_MASK) == android.view.Gravity.CENTER_HORIZONTAL) {
+            setPadding(cut / 2, getPaddingTop(), baseRight + cut / 2, getPaddingBottom());   // keep centred text centred
+        } else {
+            setPadding(getPaddingLeft(), getPaddingTop(), baseRight + cut, getPaddingBottom());
+        }
         invalidate();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent e) {
+        // the cut-off corner is not part of the card
+        if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN && e.getX() > getWidth() - cut + e.getY()) {
+            return false;
+        }
+        return super.dispatchTouchEvent(e);
     }
 
     private void buildPath() {

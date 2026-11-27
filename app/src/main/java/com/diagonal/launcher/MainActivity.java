@@ -729,6 +729,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         if (current >= 0) {
             box.addView(menuRow(getString(R.string.unpin), () -> {
                 dlg.dismiss();
+                lastHome[from] = null;
                 String[] f = readFavorites(); f[from] = ""; saveFavorites(f); rearrange(false);
             }));
         }
@@ -905,6 +906,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                 dlg.dismiss();
                 pickApp(getString(R.string.home_place, s + 1), app -> {
                     if (app == null) {
+                        lastHome[s] = null;
                         String[] f = readFavorites(); f[s] = ""; saveFavorites(f); rearrange(false);
                     } else {
                         String[] f = readFavorites();

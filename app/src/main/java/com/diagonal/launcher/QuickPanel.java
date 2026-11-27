@@ -135,7 +135,11 @@ public class QuickPanel extends View {
         rows.clear();
         rows.addAll(list);
         clearLabel = clearText;
-        if (level == 2 && Math.abs(bigLegs() - legs) > 1f && (anim == null || !anim.isRunning())) setLevel(2);
+        if (level == 2) {
+            float target = bigLegs();
+            if (anim != null && anim.isRunning()) anim.setFloatValues(legs, target);
+            else if (Math.abs(target - legs) > 1f) animateTo(target);
+        }
         invalidate();
     }
 
@@ -164,6 +168,16 @@ public class QuickPanel extends View {
         anim.start();
     }
 
+    /** Resize without resetting a tile swap in progress. */
+    private void animateTo(float target) {
+        if (anim != null) anim.cancel();
+        anim = ValueAnimator.ofFloat(legs, target);
+        anim.setDuration(220);
+        anim.setInterpolator(new DecelerateInterpolator());
+        anim.addUpdateListener(a -> { legs = (float) a.getAnimatedValue(); invalidate(); });
+        anim.start();
+    }
+
     @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
         super.onSizeChanged(w, h, ow, oh);
@@ -182,10 +196,10 @@ public class QuickPanel extends View {
             for (int col = 0; col < 4; col++) {
                 float cx = w - pad - cell * (col + 0.5f);
                 float cy = topInset + pad + cell * (row + 0.5f) - 6 * dp;
-                cells.add(new float[]{cx, cy, (w - cx) + cy, Math.abs(row - col)});
+                cells.add(new float[]{cx, cy, (w - cx) + cy, Math.abs(row - col), row + col});
             }
         }
-        cells.sort((a, b) -> a[2] != b[2] ? Float.compare(a[2], b[2]) : Float.compare(a[3], b[3]));
+        cells.sort((a, b) -> a[4] != b[4] ? Float.compare(a[4], b[4]) : Float.compare(a[3], b[3]));
         if (level > 0) {
             if (anim != null) anim.cancel();
             legs = level == 1 ? smallLegs() : bigLegs();
@@ -215,7 +229,8 @@ public class QuickPanel extends View {
         if (rows.isEmpty()) return tilesOnly;
         int text = Math.min(rows.size(), TEXT_ROWS);
         float textBottom = tilesBottom() + 8 * dp + text * (rowH + rowGap);
-        float extra = rows.size() > text ? 2 * (bubble + bubbleGap) : 0f;
+        int more = rows.size() - text;
+        float extra = more > 0 ? Math.min(3, (more + 5) / 6) * (bubble + bubbleGap) + 50 * dp : 50 * dp;
         float need = getWidth() + textBottom + extra + 60 * dp;
         return Math.max(tilesOnly, Math.min(need, getWidth() + getHeight()));
     }
@@ -357,7 +372,7 @@ public class QuickPanel extends View {
             Row r = rows.get(i);
             float bottom = y + rowH;
             float width = Math.min(w - 2 * pad, legs - bottom - pad);
-            if (width < 180 * dp) return;
+            if (width < 180 * dp) break;
             r.box.set(w - pad - width, y, w - pad, bottom);
             r.shown = true;
             rowPaint.setColor(r.color);
@@ -378,9 +393,13 @@ public class QuickPanel extends View {
         }
 
         // the rest: icons, right-aligned rows that get shorter towards the corner
+        float ph = 38 * dp;
+        float pw = Math.max(rowTitle.measureText(clearLabel) + 32 * dp, 120 * dp);
         int i = text;
         while (i < rows.size()) {
             float bottom = y + bubble;
+            // always leave room for "Clear all" and stay on screen
+            if (bottom + bubbleGap + ph > Math.min(legs - pad - pw, getHeight() - pad)) break;
             float width = Math.min(w - 2 * pad, legs - bottom - pad);
             int fit = (int) ((width + bubbleGap) / (bubble + bubbleGap));
             if (fit <= 0) break;
@@ -398,8 +417,6 @@ public class QuickPanel extends View {
         }
 
         // "Clear all" pill
-        float ph = 38 * dp;
-        float pw = Math.max(rowTitle.measureText(clearLabel) + 32 * dp, 120 * dp);
         float bottom = y + ph;
         if (legs - bottom - pad >= pw) {
             clearBox.set(w - pad - pw, y, w - pad, bottom);
