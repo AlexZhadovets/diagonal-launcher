@@ -16,6 +16,8 @@ public class NotifService extends NotificationListenerService {
     /** The notification that just arrived (shown briefly on the centre stripe). */
     static volatile StatusBarNotification lastPosted;
     static volatile long lastPostedAt;
+    /** True when Do Not Disturb kept the system from popping this one up (Diagonal shows its own banner). */
+    static volatile boolean lastPostedIntercepted;
 
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -35,6 +37,12 @@ public class NotifService extends NotificationListenerService {
         if (!silent && worthShowing(sbn)) {   // only real new ones flash on the centre stripe
             lastPosted = sbn;
             lastPostedAt = System.currentTimeMillis();
+            boolean intercepted = false;
+            try {
+                Ranking r = new Ranking();
+                if (getCurrentRanking().getRanking(sbn.getKey(), r)) intercepted = !r.matchesInterruptionFilter();
+            } catch (RuntimeException ignored) { }
+            lastPostedIntercepted = intercepted;
         }
         changed();                            // the list always updates (e.g. after an inline reply)
     }

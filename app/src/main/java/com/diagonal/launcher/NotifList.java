@@ -48,6 +48,8 @@ public class NotifList extends ScrollView {
         void dismiss(List<Item> items);
         void clearAll();
         String clearLabel();
+        void openHistory();
+        void openSettings();
         String replyHint();
     }
 
@@ -143,24 +145,52 @@ public class NotifList extends ScrollView {
             g.add(it);
         }
         for (List<Item> g : groups.values()) column.addView(groupView(g));
-        if (!items.isEmpty()) {
-            TextView clear = text(13, 0xFFFFFFFF, true);
-            clear.setText(host.clearLabel());
-            clear.setGravity(Gravity.CENTER);
-            int hp = Math.round(16 * dp);
-            clear.setPadding(hp, 0, hp, 0);
-            GradientDrawable b = new GradientDrawable();
-            b.setCornerRadius(18 * dp);
-            b.setColor(0xFF2A2A31);
-            clear.setBackground(b);
-            clear.setOnClickListener(v -> host.clearAll());
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, Math.round(36 * dp));
-            lp.gravity = Gravity.END;
-            lp.topMargin = Math.round(4 * dp);
-            column.addView(clear, lp);
-        }
+        if (!items.isEmpty()) column.addView(bottomBar());
         invalidate();
+    }
+
+    /** [history]  [ Clear all ]  [settings] — like the Android shade. */
+    private View bottomBar() {
+        LinearLayout bar = new LinearLayout(getContext());
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        int h = Math.round(44 * dp);
+        View hist = roundButton(Icons.ALARM, v -> host.openHistory());
+        bar.addView(hist, new LinearLayout.LayoutParams(Math.round(64 * dp), h));
+        TextView clear = text(15, 0xFFFFFFFF, true);
+        clear.setText(host.clearLabel());
+        clear.setGravity(Gravity.CENTER);
+        clear.setBackground(pill(0xFF2C2F38, h / 2f));
+        clear.setOnClickListener(v -> host.clearAll());
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, h, 1f);
+        cl.setMargins(Math.round(8 * dp), 0, Math.round(8 * dp), 0);
+        bar.addView(clear, cl);
+        View set = roundButton(Icons.SETTINGS, v -> host.openSettings());
+        bar.addView(set, new LinearLayout.LayoutParams(Math.round(64 * dp), h));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Math.round(6 * dp);
+        bar.setLayoutParams(lp);
+        return bar;
+    }
+
+    private View roundButton(int icon, OnClickListener click) {
+        View v = new View(getContext()) {
+            final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            @Override protected void onDraw(Canvas c) {
+                p.setColor(0xFFFFFFFF);
+                Icons.draw(c, icon, getWidth() / 2f, getHeight() / 2f, 20 * dp, p);
+            }
+        };
+        v.setBackground(pill(0xFF2C2F38, 22 * dp));
+        v.setOnClickListener(click);
+        return v;
+    }
+
+    private static GradientDrawable pill(int color, float r) {
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(r);
+        g.setColor(color);
+        return g;
     }
 
     private TextView text(float sp, int color, boolean bold) {
@@ -173,62 +203,53 @@ public class NotifList extends ScrollView {
         return t;
     }
 
-    /** One app's notifications in one card (like an Android notification group). */
+    /** Card background: the shade's dark grey with a touch of the app's colour. */
+    private static int tint(int app) {
+        int base = 0xFF23262E;
+        float k = 0.22f;
+        int r = Math.round(((base >> 16) & 255) * (1 - k) + ((app >> 16) & 255) * k);
+        int g = Math.round(((base >> 8) & 255) * (1 - k) + ((app >> 8) & 255) * k);
+        int b = Math.round((base & 255) * (1 - k) + (app & 255) * k);
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
+    /** One app's notifications in one rounded card (several of them are separated by a thin gap). */
     private View groupView(List<Item> group) {
         Item head = group.get(0);
         AppEntry app = host.appFor(head.pkg);
         int accent = app != null ? app.color : 0xFF8888AA;
         boolean open = expanded.contains(head.pkg);
-        boolean expandable = group.size() > 1 || hasMore(head);
+        int bg = tint(accent);
 
-        int ink = ColorExtractor.textColorFor(accent);
-        SlantCard card = new SlantCard(getContext(), accent);   // each app's notifications in its own colour
-        card.setOrientation(LinearLayout.VERTICAL);
-        int p = Math.round(12 * dp);
-        card.setPadding(p, Math.round(10 * dp), p, Math.round(10 * dp));
-        card.setCut(Math.round(14 * dp));   // small diagonal corner, the launcher's mark
-
-        // header: app stripe · name · time · chevron
-        LinearLayout header = new LinearLayout(getContext());
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        AppTileView tile = new AppTileView(getContext(), app);
-        int th = Math.round(18 * dp);
-        header.addView(tile, new LinearLayout.LayoutParams(Math.round(th * 1.6f), th));
-        TextView name = text(12, (ink & 0x00FFFFFF) | 0xCC000000, true);
-        name.setText((app != null ? app.label : head.pkg) + "  ·  " + ago(head.when)
-                + (group.size() > 1 && !open ? "  ·  " + group.size() : ""));
-        name.setPadding(Math.round(8 * dp), 0, 0, 0);
-        header.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        if (expandable) {
-            TextView chev = text(16, ink, true);
-            chev.setText(open ? "⌃" : "⌄");
-            chev.setGravity(Gravity.CENTER);
-            int cs = Math.round(32 * dp);
-            chev.setOnClickListener(v -> {
-                if (expanded.contains(head.pkg)) expanded.remove(head.pkg); else expanded.add(head.pkg);
-                int i = column.indexOfChild(swipeParent(card));
-                if (i < 0) return;
-                column.removeViewAt(i);
-                column.addView(groupView(group), i);
-            });
-            header.addView(chev, new LinearLayout.LayoutParams(cs, cs));
-        }
-        card.addView(header);
-
+        LinearLayout stack = new LinearLayout(getContext());
+        stack.setOrientation(LinearLayout.VERTICAL);
         int show = open ? group.size() : Math.min(group.size(), 2);
-        for (int k = 0; k < show; k++) card.addView(entryView(group.get(k), open, accent));
+        for (int k = 0; k < show; k++) {
+            boolean first = k == 0, last = k == show - 1;
+            float big = 26 * dp, small = 8 * dp;
+            GradientDrawable g = new GradientDrawable();
+            g.setColor(bg);
+            g.setCornerRadii(new float[]{first ? big : small, first ? big : small, first ? big : small, first ? big : small,
+                    last ? big : small, last ? big : small, last ? big : small, last ? big : small});
+            View entry = entryView(group.get(k), open, accent, app, k == 0, group, stack);
+            entry.setBackground(g);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (!first) lp.topMargin = Math.round(3 * dp);
+            stack.addView(entry, lp);
+        }
         if (!open && group.size() > 2) {
-            TextView more = text(12, (ink & 0x00FFFFFF) | 0x99000000, false);
+            TextView more = text(12, 0x99FFFFFF, true);
             more.setText("+" + (group.size() - 2));
-            more.setPadding(0, Math.round(4 * dp), 0, 0);
-            card.addView(more);
+            more.setPadding(Math.round(70 * dp), Math.round(4 * dp), 0, 0);
+            stack.addView(more);
         }
 
         Swipe swipe = new Swipe(getContext(), () -> host.dismiss(group));
-        swipe.addView(card);
+        swipe.addView(stack);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = Math.round(8 * dp);
+        lp.bottomMargin = Math.round(12 * dp);
         swipe.setLayoutParams(lp);
         return swipe;
     }
@@ -237,60 +258,106 @@ public class NotifList extends ScrollView {
 
     private boolean hasMore(Item it) { return !it.actions.isEmpty() || (it.big != null && !it.big.equals(it.text)); }
 
-    private View entryView(Item it, boolean open, int accent) {
-        int ink = ColorExtractor.textColorFor(accent);
+    /** Avatar (contact picture with the app as a badge, or the app icon), text, expand button, actions. */
+    private View entryView(Item it, boolean open, int accent, AppEntry app, boolean showChevron,
+                           List<Item> group, LinearLayout stack) {
         LinearLayout box = new LinearLayout(getContext());
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(0, Math.round(6 * dp), 0, 0);
+        int p = Math.round(14 * dp);
+        box.setPadding(p, p, p, p);
 
         LinearLayout row = new LinearLayout(getContext());
-        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setGravity(Gravity.TOP);
+        row.addView(avatar(it, app), new LinearLayout.LayoutParams(Math.round(44 * dp), Math.round(44 * dp)));
+
         LinearLayout texts = new LinearLayout(getContext());
         texts.setOrientation(LinearLayout.VERTICAL);
-        TextView title = text(14, ink, true);
+        texts.setPadding(Math.round(12 * dp), 0, Math.round(6 * dp), 0);
+        TextView header = text(12, 0xB3FFFFFF, true);
+        header.setText((app != null ? app.label : it.pkg) + " • " + ago(it.when));
+        TextView title = text(15, 0xFFFFFFFF, true);
         title.setText(it.title);
-        TextView body = text(13, (ink & 0x00FFFFFF) | 0xCC000000, false);
+        TextView body = text(14, 0xD9FFFFFF, false);
         String b = open && it.big != null ? it.big : it.text;
         body.setText(b);
         if (open) { body.setSingleLine(false); body.setMaxLines(8); }
-        texts.addView(title);
+        texts.addView(header);
+        if (!it.title.isEmpty()) texts.addView(title);
         if (b != null && !b.isEmpty()) texts.addView(body);
         row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        if (it.large != null) {
-            ImageView iv = new ImageView(getContext());
-            iv.setImageBitmap(it.large);
-            int s = Math.round(36 * dp);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(s, s);
-            lp.leftMargin = Math.round(8 * dp);
-            row.addView(iv, lp);
+
+        boolean expandable = group.size() > 1 || hasMore(it);
+        if (showChevron && expandable) {
+            TextView chev = text(13, 0xFFFFFFFF, true);
+            chev.setText(open ? "⌃" : "⌄");
+            chev.setGravity(Gravity.CENTER);
+            chev.setBackground(pill(0x22FFFFFF, 13 * dp));
+            chev.setOnClickListener(v -> {
+                if (expanded.contains(it.pkg)) expanded.remove(it.pkg); else expanded.add(it.pkg);
+                View sw = swipeParent(stack);
+                int i = column.indexOfChild(sw);
+                if (i < 0) return;
+                column.removeViewAt(i);
+                column.addView(groupView(group), i);
+            });
+            row.addView(chev, new LinearLayout.LayoutParams(Math.round(40 * dp), Math.round(26 * dp)));
         }
         box.addView(row);
         box.setOnClickListener(v -> host.open(it));
 
         if (open && !it.actions.isEmpty()) {
             LinearLayout acts = new LinearLayout(getContext());
-            acts.setPadding(0, Math.round(6 * dp), 0, 0);
+            acts.setPadding(Math.round(50 * dp), Math.round(8 * dp), 0, 0);
+            int ink = lighten(accent);
             for (Action a : it.actions) {
-                TextView btn = text(13, ink, true);
-                GradientDrawable bb = new GradientDrawable();
-                bb.setCornerRadius(14 * dp);
-                bb.setColor(ink == 0xFFFFFFFF ? 0x33000000 : 0x22FFFFFF);
-                btn.setBackground(bb);
+                TextView btn = text(14, ink, true);
                 btn.setText(a.title);
-                int hp = Math.round(10 * dp);
-                btn.setPadding(hp, Math.round(6 * dp), hp, Math.round(6 * dp));
+                btn.setPadding(Math.round(6 * dp), Math.round(6 * dp), Math.round(18 * dp), Math.round(6 * dp));
                 btn.setOnClickListener(v -> {
                     if (freeForm(a) != null) showReply(box, acts, it, a, accent);
                     else send(a.intent, null);
                 });
-                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                blp.rightMargin = Math.round(6 * dp);
-                acts.addView(btn, blp);
+                acts.addView(btn);
             }
             box.addView(acts);
         }
         return box;
+    }
+
+    /** Contact picture with a small app badge, or the app icon on the app's colour. */
+    private View avatar(Item it, AppEntry app) {
+        int accent = app != null ? app.color : 0xFF555566;
+        return new View(getContext()) {
+            final android.graphics.Paint fill = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            final android.graphics.Paint bmp = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG
+                    | android.graphics.Paint.FILTER_BITMAP_FLAG);
+            final android.graphics.RectF r = new android.graphics.RectF();
+            @Override protected void onDraw(Canvas c) {
+                float s = getWidth();
+                if (it.large != null) {
+                    r.set(0, 0, s, s);
+                    c.drawBitmap(it.large, null, r, bmp);
+                    if (app != null && app.icon != null) {      // badge
+                        float bs = s * 0.42f, bx = s - bs + 2 * dp, by = s - bs + 2 * dp;
+                        fill.setColor(accent);
+                        c.drawCircle(bx + bs / 2, by + bs / 2, bs / 2, fill);
+                        r.set(bx + bs * 0.18f, by + bs * 0.18f, bx + bs * 0.82f, by + bs * 0.82f);
+                        bmp.setColorFilter(app.iconFilter());
+                        c.drawBitmap(app.icon, null, r, bmp);
+                        bmp.setColorFilter(null);
+                    }
+                } else {
+                    fill.setColor(accent);
+                    c.drawCircle(s / 2, s / 2, s / 2, fill);
+                    if (app != null && app.icon != null) {
+                        r.set(s * 0.2f, s * 0.2f, s * 0.8f, s * 0.8f);
+                        bmp.setColorFilter(app.iconFilter());
+                        c.drawBitmap(app.icon, null, r, bmp);
+                        bmp.setColorFilter(null);
+                    }
+                }
+            }
+        };
     }
 
     /** Inline reply, like in the Android shade. */

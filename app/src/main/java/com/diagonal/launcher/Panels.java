@@ -255,6 +255,15 @@ final class Panels {
             }
             @Override public void clearAll() { clearNotifications(); }
             @Override public String clearLabel() { return act.getString(R.string.clear_all); }
+            @Override public void openHistory() {
+                closeAll();
+                act.startFirst(new Intent("android.settings.NOTIFICATION_HISTORY"),
+                        new Intent("android.settings.NOTIFICATION_SETTINGS"), new Intent(Settings.ACTION_SETTINGS));
+            }
+            @Override public void openSettings() {
+                closeAll();
+                act.startFirst(new Intent("android.settings.NOTIFICATION_SETTINGS"), new Intent(Settings.ACTION_SETTINGS));
+            }
             @Override public String replyHint() { return act.getString(R.string.reply_hint); }
         });
         notifList.attachShape(quick);

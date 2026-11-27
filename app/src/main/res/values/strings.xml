@@ -90,4 +90,7 @@
     <string name="set_widgets_one">Widgets: open fully with one swipe</string>
     <string name="set_swap_swipes">Swap the two swipes</string>
     <string name="reply_hint">Reply…</string>
+    <string name="quiet_title">No pop-ups on the home screen</string>
+    <string name="quiet_message">While Diagonal is on screen, other apps\' pop-up banners are replaced by Diagonal\'s own. Calls, alarms, important conversations and system alerts still pop up. This uses a temporary Do Not Disturb mode, so those notifications arrive silently while you are on the home screen; it switches off as soon as you leave.</string>
+    <string name="set_quiet">Hide pop-ups on the home screen</string>
 </resources>
