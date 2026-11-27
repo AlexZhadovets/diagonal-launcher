@@ -599,7 +599,12 @@ final class Panels {
     }
 
     private static boolean isConversation(android.content.pm.ShortcutInfo si) {
-        if (Build.VERSION.SDK_INT >= 30 && si.isLongLived()) return true;
+        String pkg = si.getPackage().toLowerCase(Locale.ROOT);
+        boolean messenger = pkg.contains("telegram") || pkg.contains("ayugram") || pkg.contains("nova")
+                || pkg.contains("whatsapp") || pkg.contains("viber") || pkg.contains("signal")
+                || pkg.contains("orca") || pkg.contains("instagram") || pkg.contains("discord")
+                || pkg.contains("messag") || pkg.contains("chat");
+        if (messenger && (si.isDynamic() || si.isPinned())) return true;
         java.util.Set<String> cats = si.getCategories();
         if (cats == null) return false;
         for (String c : cats) {
