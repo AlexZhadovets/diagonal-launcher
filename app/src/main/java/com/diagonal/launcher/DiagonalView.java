@@ -41,6 +41,8 @@ public class DiagonalView extends View {
         void onMusicControl(int which);
         /** Swipe along the tablet: +1 next page (players, then notifications), −1 back. */
         void onTabletSwipe(int direction);
+        /** Swipe up across the tablet on a notification page: dismiss it. */
+        void onTabletDismiss();
         /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
         void onCornerSwipe(int direction);
     }
@@ -89,7 +91,11 @@ public class DiagonalView extends View {
     private float scroll;
     private boolean pendingCenter = true;
     private boolean wasFlinging;
-    private boolean downOnTablet;
+    private boolean downOnTablet, downOnTabletAny;
+    private boolean tabletDismissable;
+    private float dismissDrag;          // ≤ 0: how far the notification is pushed up
+
+    public void setTabletDismissable(boolean on) { tabletDismissable = on; }
     private int pageCount = 1, pageIndex;
 
     /** Little dots on the tablet: which page (main / players / notifications) is shown. */
@@ -345,6 +351,7 @@ public class DiagonalView extends View {
         android.graphics.Bitmap icon;
         int text = 0xFFFFFFFF;
         boolean music, playing;
+        boolean compact;                // notifications: smaller type
         android.graphics.Bitmap mini;   // paused music: small cover + ▶ in the corner of the clock
     }
 
@@ -385,8 +392,20 @@ public class DiagonalView extends View {
 
     public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor,
                         boolean music, boolean playing, android.graphics.Bitmap mini) {
+        setInfo(title, subtitle, icon, color, textColor, music, playing, mini, false);
+    }
+
+    /** A notification page of the tablet: smaller type. */
+    public void setInfoCompact(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor) {
+        setInfo(title, subtitle, icon, color, textColor, false, false, null, true);
+    }
+
+    public void setInfo(String title, String subtitle, android.graphics.Bitmap icon, int color, int textColor,
+                        boolean music, boolean playing, android.graphics.Bitmap mini, boolean compact) {
         InfoContent n = new InfoContent();
         n.mini = mini;
+        n.compact = compact;
+        dismissDrag = 0f;
         n.title = title == null ? "" : title;
         n.sub = subtitle == null ? "" : subtitle;
         n.icon = icon;
@@ -394,7 +413,8 @@ public class DiagonalView extends View {
         n.music = music;
         n.playing = playing;
         boolean sameLook = n.title.equals(infoNow.title) && n.sub.equals(infoNow.sub) && n.icon == infoNow.icon
-                && n.music == infoNow.music && n.text == infoNow.text && color == infoColorTo && n.mini == infoNow.mini;
+                && n.music == infoNow.music && n.text == infoNow.text && color == infoColorTo && n.mini == infoNow.mini
+                && n.compact == infoNow.compact;
         if (sameLook) {
             infoNow.playing = playing;
             invalidate();
@@ -456,13 +476,19 @@ public class DiagonalView extends View {
         if (tMax - tMin < 80 * dp) return;
         canvas.save();
         canvas.rotate(-90f, s, (tMin + tMax) / 2f);   // text reads bottom-left → top-right
-        if (infoFade < 1f && infoPrev != null) {
+        canvas.save();
+        float dragAlpha = 1f + Math.max(-1f, dismissDrag / band);   // fades as it is pushed up
+        canvas.translate(0, dismissDrag);
+        if (dismissDrag != 0f && infoFade >= 1f) {
+            drawInfoContent(canvas, infoNow, s, tMin, tMax, Math.max(0f, dragAlpha));
+        } else if (infoFade < 1f && infoPrev != null) {
             // cross-fade: old content out in the first half, new content in during the second
             if (infoFade < 0.5f) drawInfoContent(canvas, infoPrev, s, tMin, tMax, 1f - infoFade * 2f);
             else drawInfoContent(canvas, infoNow, s, tMin, tMax, infoFade * 2f - 1f);
         } else {
             drawInfoContent(canvas, infoNow, s, tMin, tMax, 1f);
         }
+        canvas.restore();
         drawStatus(canvas, s, tMin, tMax);
         drawPager(canvas, s, tMin, tMax);
         canvas.restore();
@@ -508,6 +534,35 @@ public class DiagonalView extends View {
         float textAvail = avail - iconW;
         if (textAvail < 40 * dp) return;
 
+        float baseTitle = infoTitlePaint.getTextSize(), baseSub = infoSubPaint.getTextSize();
+        if (c.compact) {
+            infoTitlePaint.setTextSize(baseTitle * 0.55f);
+            infoSubPaint.setTextSize(baseSub * 0.95f);
+        }
+        try {
+            drawInfoText(canvas, c, s, tMin, tMax, alpha);
+        } finally {
+            infoTitlePaint.setTextSize(baseTitle);
+            infoSubPaint.setTextSize(baseSub);
+        }
+    }
+
+    private void drawInfoText(Canvas canvas, InfoContent c, float s, float tMin, float tMax, float alpha) {
+        int a = Math.round(255 * alpha);
+        float mid = (tMin + tMax) / 2f;
+        float len = tMax - tMin;
+        float left = s - len / 2f, right = s + len / 2f;
+        float btn = 44 * dp, gap = 10 * dp;
+        float blockL = left + iconGap, blockR = right - iconGap;
+        if (!c.music && c.mini != null) blockR = right - gap - 52 * dp - gap;
+        if (c.music) {
+            blockL = left + btn + 2 * gap;
+            blockR = right - 2 * btn - 3 * gap;
+        }
+        float avail = blockR - blockL;
+        float iconW = c.icon != null ? iconSize + iconGap : 0f;
+        float textAvail = avail - iconW;
+        if (textAvail < 40 * dp) return;
         infoTitlePaint.setColor(c.text);
         infoTitlePaint.setAlpha(a);
         infoSubPaint.setColor(c.text);
@@ -818,6 +873,20 @@ public class DiagonalView extends View {
                 else listener.onCornerSwipe(along > 0 ? 1 : -1);
             }
         }
+        if (touchMode == 3 && (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)) {
+            boolean gone = action == MotionEvent.ACTION_UP && dismissDrag < -56 * dp;
+            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(dismissDrag, gone ? -band : 0f);
+            va.setDuration(180);
+            va.addUpdateListener(an -> { dismissDrag = (float) an.getAnimatedValue(); invalidate(); });
+            if (gone) {
+                va.addListener(new android.animation.AnimatorListenerAdapter() {
+                    @Override public void onAnimationEnd(android.animation.Animator an) {
+                        if (listener != null) listener.onTabletDismiss();
+                    }
+                });
+            }
+            va.start();
+        }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) touchMode = 0;
         return handled || super.onTouchEvent(e);
     }
@@ -856,7 +925,8 @@ public class DiagonalView extends View {
             downY = e.getY();
             touchMode = 0;
             int di = indexAt(downX, downY);
-            downOnTablet = di >= 0 && items.get(di).info && pageCount > 1;
+            downOnTabletAny = di >= 0 && items.get(di).info;
+            downOnTablet = downOnTabletAny && pageCount > 1;
             return true;
         }
 
@@ -870,9 +940,16 @@ public class DiagonalView extends View {
                 } else {
                     float along = Math.abs(tx - ty), across = Math.abs(tx + ty);
                     touchMode = along > across * 2.4f ? 2 : 1;   // within ±22° of the stripes
+                    // up across a notification on the tablet: swipe it away instead of scrolling
+                    if (touchMode == 1 && downOnTabletAny && tabletDismissable && tx + ty < 0) touchMode = 3;
                 }
             }
             if (touchMode == 2) return true;   // swipe along the stripes: corner panel
+            if (touchMode == 3) {
+                dismissDrag = Math.min(0f, (e2.getX() - downX + e2.getY() - downY) * INV_SQRT2);
+                invalidate();
+                return true;
+            }
             scroll += (dx + dy) * INV_SQRT2;
             clampScroll();
             invalidate();
@@ -880,7 +957,7 @@ public class DiagonalView extends View {
         }
 
         @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
-            if (touchMode == 2) return true;
+            if (touchMode == 2 || touchMode == 3) return true;
             int v = Math.round(-(vx + vy) * INV_SQRT2);
             scroller.fling(Math.round(scroll), 0, v, 0,
                     Math.round(minScroll()), Math.round(maxScroll()), 0, 0);

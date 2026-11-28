@@ -366,6 +366,16 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private Object currentPageId;   // keeps the same page when the list changes around it
 
     @Override
+    public void onTabletDismiss() {
+        if (!(currentPage instanceof NotifList.Item)) return;
+        NotifList.Item it = (NotifList.Item) currentPage;
+        NotifService svc = NotifService.instance;
+        if (svc != null) { try { svc.cancelNotification(it.key); } catch (RuntimeException ignored) { } }
+        currentPageId = null;            // stay at this position: the next notification slides in
+        main.postDelayed(this::updateInfoStripe, 150);
+    }
+
+    @Override
     public void onTabletSwipe(int direction) {
         // swipe towards the bottom-left = next page (like pushing the current page away), towards the top-right = back
         tabletPage = Math.max(0, tabletPage - direction);
@@ -415,6 +425,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         currentPage = pages.get(tabletPage);
         currentPageId = pageId(currentPage);
         diagonal.setPager(pages.size(), tabletPage);
+        diagonal.setTabletDismissable(currentPage instanceof NotifList.Item);
 
         String notifLine = null;
         InfoHub.Notif n = info.notif;
@@ -439,7 +450,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
             int c = app != null ? app.color : 0xFF26262E;
             String title = it.title.isEmpty() ? (app != null ? app.label : "") : it.title;
             String sub = (app != null ? app.label + " · " : "") + it.text;
-            diagonal.setInfo(title, sub, it.large, c, ColorExtractor.textColorFor(c));
+            diagonal.setInfoCompact(title, sub, it.large, c, ColorExtractor.textColorFor(c));
         } else if (notifLine != null) {
             // clock stays; for a few seconds the tablet takes the app's colour and shows the message
             AppEntry na = appFor(n.pkg);
