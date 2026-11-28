@@ -111,7 +111,7 @@ public class QuickPanel extends View {
         ring.setStrokeWidth(3 * dp);
         ring.setColor(0xFFFFFFFF);
         label.setColor(0xDDFFFFFF);
-        label.setTextSize(11 * dp);
+        label.setTextSize(10 * dp);
         label.setTextAlign(Paint.Align.CENTER);
         rowTitle.setTextSize(15 * dp);
         rowTitle.setTypeface(android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.BOLD));
@@ -207,7 +207,7 @@ public class QuickPanel extends View {
         int w = getWidth();
         if (w == 0) return;
         cells.clear();
-        cell = Math.min(w / 4.2f, 96 * dp);
+        cell = Math.min(w / 5.4f, 74 * dp);   // compact tiles, like a phone shade
         radius = cell * 0.30f;
         float pad = 6 * dp;
         for (int row = 0; row < 4; row++) {
@@ -236,7 +236,7 @@ public class QuickPanel extends View {
     private float tilesBottom() {
         float bottom = topInset;
         for (int i = 0; i < tiles.size() && i < cells.size(); i++) {
-            bottom = Math.max(bottom, cells.get(i)[1] + radius + 22 * dp);
+            bottom = Math.max(bottom, cells.get(i)[1] + radius + 18 * dp);
         }
         return bottom;
     }
@@ -246,7 +246,7 @@ public class QuickPanel extends View {
         float tilesOnly = legsFor(tiles.size());
         if (!hasNotifications) return tilesOnly;
         // like the Android shade: room for the list, the diagonal edge only cuts the far corner
-        return Math.max(tilesOnly, getWidth() + fullHeight * 0.9f);
+        return Math.max(tilesOnly, getWidth() + fullHeight * 0.66f);
     }
 
     // ---- touch ------------------------------------------------------------
@@ -342,7 +342,7 @@ public class QuickPanel extends View {
             iconPaint.setColor(t.active ? 0xFF111111 : 0xFFFFFFFF);
             Icons.draw(canvas, t.icon, c[0], c[1], radius * 1.1f, iconPaint);
             CharSequence l = TextUtils.ellipsize(t.label, label, cell - 4 * dp, TextUtils.TruncateAt.END);
-            canvas.drawText(l, 0, l.length(), c[0], c[1] + radius + 14 * dp, label);
+            canvas.drawText(l, 0, l.length(), c[0], c[1] + radius + 12 * dp, label);
         }
         if (onShapeChange != null) onShapeChange.run();
     }
@@ -359,7 +359,7 @@ public class QuickPanel extends View {
             canvas.drawCircle(c[0], c[1], radius, circle);
             drawIcon(canvas, a.icon, a.iconFilter(), c[0], c[1], radius * 1.25f);
             CharSequence l = TextUtils.ellipsize(a.label, label, cell - 4 * dp, TextUtils.TruncateAt.END);
-            canvas.drawText(l, 0, l.length(), c[0], c[1] + radius + 14 * dp, label);
+            canvas.drawText(l, 0, l.length(), c[0], c[1] + radius + 12 * dp, label);
         }
     }
 
