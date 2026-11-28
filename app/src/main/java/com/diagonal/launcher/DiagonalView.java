@@ -147,7 +147,7 @@ public class DiagonalView extends View {
         edgePaint.setColor(BG);
         flashPaint.setColor(0xFFFFFFFF);
 
-        cornerMin = 56 * dp;
+        cornerMin = 40 * dp;
         Typeface heavy = android.os.Build.VERSION.SDK_INT >= 28
                 ? Typeface.create(Typeface.SANS_SERIF, 900, false)
                 : Typeface.create("sans-serif-black", Typeface.BOLD);
@@ -933,13 +933,11 @@ public class DiagonalView extends View {
         @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
             if (touchMode == 0) {
                 float tx = e2.getX() - downX, ty = e2.getY() - downY;
-                if (tx * tx + ty * ty < (24 * dp) * (24 * dp)) {
-                    // not sure yet: scroll a little anyway unless it clearly runs along the stripes
-                    float al = Math.abs(tx - ty), ac = Math.abs(tx + ty);
-                    if (al > ac * 2.4f) return true;
+                if (tx * tx + ty * ty < (16 * dp) * (16 * dp)) {
+                    // not sure yet: scroll a little anyway unless it looks like a panel swipe
+                    if (panelSwipe(tx, ty)) return true;
                 } else {
-                    float along = Math.abs(tx - ty), across = Math.abs(tx + ty);
-                    touchMode = along > across * 2.4f ? 2 : 1;   // within ±22° of the stripes
+                    touchMode = panelSwipe(tx, ty) ? 2 : 1;
                     // down across a notification on the tablet: swipe it away instead of scrolling
                     if (touchMode == 1 && downOnTabletAny && tabletDismissable && tx + ty > 0) touchMode = 3;
                 }
@@ -954,6 +952,12 @@ public class DiagonalView extends View {
             clampScroll();
             invalidate();
             return true;
+        }
+
+        /** Along the stripes, or simply left/right: opens a corner panel (or pages the tablet). */
+        private boolean panelSwipe(float tx, float ty) {
+            float along = Math.abs(tx - ty), across = Math.abs(tx + ty);
+            return along > across * 2.4f || Math.abs(tx) > Math.abs(ty) * 1.3f;
         }
 
         @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {

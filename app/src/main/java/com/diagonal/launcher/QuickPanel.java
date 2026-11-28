@@ -319,6 +319,37 @@ public class QuickPanel extends View {
 
     // ---- drawing ----------------------------------------------------------
 
+    private final TextPaint clockPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint datePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+
+    /** Clock, date and battery in the free corner left of the tiles, like the phone's own shade. */
+    private void drawHeader(Canvas canvas, int w) {
+        float pad = 16 * dp;
+        float right = w - cell * 4 - 10 * dp;
+        float room = right - pad;
+        if (room < 70 * dp) return;
+        float top = topInset + 18 * dp;
+        java.util.Date now = new java.util.Date();
+        String time = android.text.format.DateFormat.getTimeFormat(getContext()).format(now);
+        String date = android.text.format.DateFormat.format("EEE, d MMM", now).toString();
+        android.os.BatteryManager bm = getContext().getSystemService(android.os.BatteryManager.class);
+        int pct = bm != null ? bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) : -1;
+        clockPaint.setColor(0xFFFFFFFF);
+        clockPaint.setTypeface(android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL));
+        clockPaint.setTextSize(48 * dp);
+        float tw = clockPaint.measureText(time);
+        if (tw > room) clockPaint.setTextSize(48 * dp * room / tw);
+        datePaint.setColor(0xCCFFFFFF);
+        datePaint.setTextSize(15 * dp);
+        float y = top - clockPaint.ascent();
+        if ((w - pad) + y > legs) return;               // the triangle hasn't reached here yet
+        canvas.drawText(time, pad, y, clockPaint);
+        y += 26 * dp;
+        canvas.drawText(TextUtils.ellipsize(date, datePaint, room, TextUtils.TruncateAt.END).toString(), pad, y, datePaint);
+        if (pct >= 0) { y += 22 * dp; canvas.drawText(pct + "%", pad, y, datePaint); }
+        postInvalidateDelayed(30_000);
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         if (legs <= 0) return;
@@ -330,6 +361,7 @@ public class QuickPanel extends View {
         tri.close();
         canvas.drawPath(tri, bg);
         canvas.drawLine(w - legs, 0, w, legs, edge);
+        if (level == 2) drawHeader(canvas, w);
 
         int visible = level == 1 ? Math.min(LEVEL1_TILES, tiles.size()) : tiles.size();
         for (int i = 0; i < visible && i < cells.size(); i++) {
