@@ -23,8 +23,29 @@ final class AppEntry {
     private static final android.graphics.ColorFilter INK_DARK =
             new android.graphics.PorterDuffColorFilter(0xFF111111, android.graphics.PorterDuff.Mode.SRC_IN);
 
+    /** Two-colour theme (0 = off): every stripe gets themeBg, every icon and label themeFg. */
+    static int themeBg, themeFg;
+    private static android.graphics.ColorFilter themeGlyph, themeDuo;
+
+    static void setTheme(int bg, int fg) {
+        themeBg = bg; themeFg = fg;
+        if (bg == 0) { themeGlyph = null; themeDuo = null; return; }
+        themeGlyph = new android.graphics.PorterDuffColorFilter(fg, android.graphics.PorterDuff.Mode.SRC_IN);
+        // detailed icons: brightness mapped from the background colour (dark) to the ink colour (light)
+        float[] m = new float[20];
+        int[] b = {(bg >> 16) & 255, (bg >> 8) & 255, bg & 255};
+        int[] f = {(fg >> 16) & 255, (fg >> 8) & 255, fg & 255};
+        for (int c = 0; c < 3; c++) {
+            float k = (f[c] - b[c]) / 255f;
+            m[c * 5] = 0.299f * k; m[c * 5 + 1] = 0.587f * k; m[c * 5 + 2] = 0.114f * k; m[c * 5 + 4] = b[c];
+        }
+        m[18] = 1f;
+        themeDuo = new android.graphics.ColorMatrixColorFilter(m);
+    }
+
     /** Colour filter for drawing the icon (glyphs follow the text colour). */
     android.graphics.ColorFilter iconFilter() {
+        if (themeBg != 0) return glyph ? themeGlyph : themeDuo;
         if (!glyph) return null;
         return textColor == 0xFFFFFFFF ? INK_WHITE : INK_DARK;
     }

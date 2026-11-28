@@ -535,7 +535,12 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         boolean[] checked = {prefs.getBoolean(KEY_HIDE_STATUS, true), prefs.getBoolean(KEY_LOCK_SNAPSHOT, false),
                 prefs.getBoolean(Panels.KEY_QUICK_ONE, false), prefs.getBoolean(Panels.KEY_WIDGETS_ONE, false),
                 prefs.getBoolean(Panels.KEY_SWAP_SWIPES, false)};
-        shownDialog = dialog().setTitle(R.string.app_name)
+        TextView themeRow = menuRow(getString(R.string.theme) + ": "
+                + getResources().getStringArray(R.array.themes)[prefs.getInt(KEY_THEME, 0)] + "  ›", () -> {
+            if (shownDialog != null) shownDialog.dismiss();
+            chooseTheme();
+        });
+        shownDialog = dialog().setCustomTitle(themeRow)
                 .setMultiChoiceItems(items, checked, (d, which, on) -> {
                     if (which == 0) { prefs.edit().putBoolean(KEY_HIDE_STATUS, on).apply(); applySystemBars(); }
                     else if (which == 1) {
@@ -1012,6 +1017,29 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     // ---- no pop-ups on the home screen (own banner instead) -------------
 
     static final String KEY_QUIET = "quiet_popups";
+    static final String KEY_THEME = "theme";
+    /** {stripe colour, ink colour}; index 0 = the apps' own colours. */
+    static final int[][] THEMES = {
+            {0, 0},
+            {0xFF000000, 0xFFFFFFFF},   // black & white
+            {0xFFFFFFFF, 0xFF000000},   // white & black
+            {0xFF0F1A2E, 0xFFE8C46A},   // navy & gold
+            {0xFF1E2124, 0xFF7EF2C4},   // graphite & mint
+            {0xFF4A0E1C, 0xFFF3E6D0},   // burgundy & cream
+            {0xFF0B0B0B, 0xFFFF3B30},   // black & red
+    };
+
+    void chooseTheme() {
+        String[] names = getResources().getStringArray(R.array.themes);
+        shownDialog = dialog().setTitle(R.string.theme)
+                .setSingleChoiceItems(names, prefs.getInt(KEY_THEME, 0), (d, which) -> {
+                    prefs.edit().putInt(KEY_THEME, which).apply();
+                    d.dismiss();
+                    rearrange(false);
+                    diagonal.invalidate();
+                })
+                .show();
+    }
     /** Tablet notification background: the grey of an Android notification card, not the app colour. */
     private static final int NOTIF_CARD = 0xFF2B2E36;
     private static final String KEY_QUIET_ON = "quiet_active";
@@ -1407,7 +1435,10 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         Map<String, Long> use = usage;
         Collator collator = Collator.getInstance();
         // user colours (two-tone apps only)
+        int theme = prefs.getInt(KEY_THEME, 0);
+        AppEntry.setTheme(THEMES[theme][0], THEMES[theme][1]);
         for (AppEntry a : apps) {
+            if (theme != 0) { a.color = THEMES[theme][0]; a.textColor = THEMES[theme][1]; continue; }
             int c = a.glyph ? prefs.getInt(KEY_COLOR_PREFIX + a.key, 0) : 0;
             a.color = c != 0 ? c : a.autoColor;
             a.textColor = ColorExtractor.textColorFor(a.color);

@@ -96,4 +96,14 @@
     <string name="alert_region">Alert region</string>
     <string name="alert_auto">Auto (from location)</string>
     <string name="alert_off">Off</string>
+    <string name="theme">Theme</string>
+    <string-array name="themes">
+        <item>Colours from icons</item>
+        <item>Black &amp; white</item>
+        <item>White &amp; black</item>
+        <item>Navy &amp; gold</item>
+        <item>Graphite &amp; mint</item>
+        <item>Burgundy &amp; cream</item>
+        <item>Black &amp; red</item>
+    </string-array>
 </resources>

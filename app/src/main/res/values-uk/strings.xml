@@ -96,4 +96,14 @@
     <string name="alert_region">Регіон тривог</string>
     <string name="alert_auto">Авто (за місцезнаходженням)</string>
     <string name="alert_off">Вимкнути</string>
+    <string name="theme">Тема</string>
+    <string-array name="themes">
+        <item>Кольори з іконок</item>
+        <item>Чорно-біла</item>
+        <item>Біло-чорна</item>
+        <item>Синьо-золота</item>
+        <item>Графіт і м’ята</item>
+        <item>Бордо і крем</item>
+        <item>Чорно-червона</item>
+    </string-array>
 </resources>
