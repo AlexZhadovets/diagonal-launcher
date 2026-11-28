@@ -447,15 +447,15 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         } else if (currentPage instanceof NotifList.Item) {
             NotifList.Item it = (NotifList.Item) currentPage;
             AppEntry app = appFor(it.pkg);
-            int c = app != null ? app.color : 0xFF26262E;
+            // a plain Android-style card: calm grey, app icon/avatar, app name, title and text
+            int c = NOTIF_CARD;
             String title = it.title.isEmpty() ? (app != null ? app.label : "") : it.title;
             String sub = (app != null ? app.label + " · " : "") + it.text;
-            diagonal.setInfoCompact(title, sub, it.large, c, ColorExtractor.textColorFor(c));
+            Bitmap pic = it.large != null ? it.large : (app != null ? app.icon : null);
+            diagonal.setInfoCompact(title, sub, pic, c, 0xFFF1F1F4);
         } else if (notifLine != null) {
             // clock stays; for a few seconds the tablet takes the app's colour and shows the message
-            AppEntry na = appFor(n.pkg);
-            int c = na != null ? na.color : 0xFF16161C;
-            diagonal.setInfo(info.time(), notifLine, null, c, ColorExtractor.textColorFor(c));
+            diagonal.setInfo(info.time(), notifLine, null, NOTIF_CARD, 0xFFF1F1F4);
         } else {
             String sub = info.date();
             if (!info.weather.isEmpty()) sub += "  ·  " + info.weather;
@@ -1012,6 +1012,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     // ---- no pop-ups on the home screen (own banner instead) -------------
 
     static final String KEY_QUIET = "quiet_popups";
+    /** Tablet notification background: the grey of an Android notification card, not the app colour. */
+    private static final int NOTIF_CARD = 0xFF2B2E36;
     private static final String KEY_QUIET_ON = "quiet_active";
     private static final String KEY_QUIET_ASKED = "quiet_asked";
     private boolean resumed;
