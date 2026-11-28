@@ -41,7 +41,7 @@ public class DiagonalView extends View {
         void onMusicControl(int which);
         /** Swipe along the tablet: +1 next page (players, then notifications), −1 back. */
         void onTabletSwipe(int direction);
-        /** Swipe up across the tablet on a notification page: dismiss it. */
+        /** Swipe down across the tablet on a notification page: dismiss it. */
         void onTabletDismiss();
         /** Swipe along the stripes: +1 towards the top-right, −1 towards the bottom-left. */
         void onCornerSwipe(int direction);
@@ -93,7 +93,7 @@ public class DiagonalView extends View {
     private boolean wasFlinging;
     private boolean downOnTablet, downOnTabletAny;
     private boolean tabletDismissable;
-    private float dismissDrag;          // ≤ 0: how far the notification is pushed up
+    private float dismissDrag;          // ≥ 0: how far the notification is pushed down
 
     public void setTabletDismissable(boolean on) { tabletDismissable = on; }
     private int pageCount = 1, pageIndex;
@@ -477,7 +477,7 @@ public class DiagonalView extends View {
         canvas.save();
         canvas.rotate(-90f, s, (tMin + tMax) / 2f);   // text reads bottom-left → top-right
         canvas.save();
-        float dragAlpha = 1f + Math.max(-1f, dismissDrag / band);   // fades as it is pushed up
+        float dragAlpha = 1f - Math.min(1f, Math.abs(dismissDrag) / band);   // fades as it is pushed up
         canvas.translate(0, dismissDrag);
         if (dismissDrag != 0f && infoFade >= 1f) {
             drawInfoContent(canvas, infoNow, s, tMin, tMax, Math.max(0f, dragAlpha));
@@ -874,8 +874,8 @@ public class DiagonalView extends View {
             }
         }
         if (touchMode == 3 && (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)) {
-            boolean gone = action == MotionEvent.ACTION_UP && dismissDrag < -56 * dp;
-            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(dismissDrag, gone ? -band : 0f);
+            boolean gone = action == MotionEvent.ACTION_UP && dismissDrag > 56 * dp;
+            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(dismissDrag, gone ? band : 0f);
             va.setDuration(180);
             va.addUpdateListener(an -> { dismissDrag = (float) an.getAnimatedValue(); invalidate(); });
             if (gone) {
@@ -940,13 +940,13 @@ public class DiagonalView extends View {
                 } else {
                     float along = Math.abs(tx - ty), across = Math.abs(tx + ty);
                     touchMode = along > across * 2.4f ? 2 : 1;   // within ±22° of the stripes
-                    // up across a notification on the tablet: swipe it away instead of scrolling
-                    if (touchMode == 1 && downOnTabletAny && tabletDismissable && tx + ty < 0) touchMode = 3;
+                    // down across a notification on the tablet: swipe it away instead of scrolling
+                    if (touchMode == 1 && downOnTabletAny && tabletDismissable && tx + ty > 0) touchMode = 3;
                 }
             }
             if (touchMode == 2) return true;   // swipe along the stripes: corner panel
             if (touchMode == 3) {
-                dismissDrag = Math.min(0f, (e2.getX() - downX + e2.getY() - downY) * INV_SQRT2);
+                dismissDrag = Math.max(0f, (e2.getX() - downX + e2.getY() - downY) * INV_SQRT2);
                 invalidate();
                 return true;
             }
