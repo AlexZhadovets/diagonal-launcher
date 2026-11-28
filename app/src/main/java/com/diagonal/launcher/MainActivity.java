@@ -367,7 +367,8 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
 
     @Override
     public void onTabletSwipe(int direction) {
-        tabletPage = Math.max(0, tabletPage + direction);
+        // swipe towards the bottom-left = next page (like pushing the current page away), towards the top-right = back
+        tabletPage = Math.max(0, tabletPage - direction);
         currentPageId = null;
         updateInfoStripe();
     }
