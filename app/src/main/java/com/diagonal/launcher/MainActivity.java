@@ -108,7 +108,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
         info = new InfoHub(this);
         info.setListener(this::updateInfoStripe);
         undoOldQuietMode();   // a short-lived earlier version changed the user's DND settings
-        quietOff();           // in case the app was killed while the quiet mode was on
+        removeQuietRule();    // Diagonal's own pop-up blocker is gone: system heads-up notifications again
         infoEntry = new AppEntry(new ComponentName(getPackageName(), "info"));
         goEdgeToEdge();
 
@@ -531,11 +531,10 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     /** Launcher settings (the "Diagonal" tile in the big quick panel). */
     void showLauncherSettings() {
         String[] items = {getString(R.string.set_hide_status), getString(R.string.set_lock_snapshot),
-                getString(R.string.set_quick_one), getString(R.string.set_widgets_one), getString(R.string.set_swap_swipes),
-                getString(R.string.set_quiet)};
+                getString(R.string.set_quick_one), getString(R.string.set_widgets_one), getString(R.string.set_swap_swipes)};
         boolean[] checked = {prefs.getBoolean(KEY_HIDE_STATUS, true), prefs.getBoolean(KEY_LOCK_SNAPSHOT, false),
                 prefs.getBoolean(Panels.KEY_QUICK_ONE, false), prefs.getBoolean(Panels.KEY_WIDGETS_ONE, false),
-                prefs.getBoolean(Panels.KEY_SWAP_SWIPES, false), prefs.getBoolean(KEY_QUIET, true)};
+                prefs.getBoolean(Panels.KEY_SWAP_SWIPES, false)};
         shownDialog = dialog().setTitle(R.string.app_name)
                 .setMultiChoiceItems(items, checked, (d, which, on) -> {
                     if (which == 0) { prefs.edit().putBoolean(KEY_HIDE_STATUS, on).apply(); applySystemBars(); }
@@ -545,14 +544,6 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                     else if (which == 2) prefs.edit().putBoolean(Panels.KEY_QUICK_ONE, on).apply();
                     else if (which == 3) prefs.edit().putBoolean(Panels.KEY_WIDGETS_ONE, on).apply();
                     else if (which == 4) prefs.edit().putBoolean(Panels.KEY_SWAP_SWIPES, on).apply();
-                    else {
-                        prefs.edit().putBoolean(KEY_QUIET, on).apply();
-                        if (on) {
-                            if (!getSystemService(android.app.NotificationManager.class).isNotificationPolicyAccessGranted()) {
-                                startFirst(new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS));
-                            } else quietOn();
-                        } else quietOff();
-                    }
                 })
                 .setNeutralButton(R.string.set_notif_access, (d, w) -> openNotificationAccess())
                 .setNegativeButton(R.string.alert_region, (d, w) -> chooseAlertRegion())
@@ -636,7 +627,7 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
                     .show();
             return;
         }
-        if (Build.VERSION.SDK_INT >= 29 && !prefs.getBoolean(KEY_QUIET_ASKED, false) && prefs.getBoolean(KEY_QUIET, true)
+        if (false && Build.VERSION.SDK_INT >= 29 && !prefs.getBoolean(KEY_QUIET_ASKED, false) && prefs.getBoolean(KEY_QUIET, true)
                 && !getSystemService(android.app.NotificationManager.class).isNotificationPolicyAccessGranted()) {
             maybeAskQuietAccess();
             return;
@@ -1079,10 +1070,25 @@ public class MainActivity extends Activity implements DiagonalView.Listener {
     private int topInset;
 
     private void quietOn() {
-        if (prefs.getBoolean(KEY_QUIET, true)) setZen(true);
+        // removed: the system's own pop-ups are used everywhere
     }
 
-    private void quietOff() { setZen(false); }
+    private void quietOff() { if (quietActive) setZen(false); }
+
+    /** Turn off and delete the home-screen DND rule older versions created. */
+    private void removeQuietRule() {
+        String id = prefs.getString("zen_rule", null);
+        if (id == null || Build.VERSION.SDK_INT < 29) return;
+        android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+        try {
+            if (nm.isNotificationPolicyAccessGranted()) {
+                setZen(false);
+                nm.removeAutomaticZenRule(id);
+                prefs.edit().remove("zen_rule").apply();
+            }
+        } catch (Throwable ignored) { }
+        quietActive = false;
+    }
 
     /** Puts back DND exactly as it was if build 27 left its global change behind. */
     private void undoOldQuietMode() {
